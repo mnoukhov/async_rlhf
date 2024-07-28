@@ -52,7 +52,13 @@ def prepare_dataset(dataset, tokenizer):
 
 if __name__ == "__main__":
     parser = TRLParser((ScriptArguments, RLOOConfig, ModelConfig))
-    args, config, model_config = parser.parse_args_and_config()
+    (args, config, model_config), remaining_args = parser.parse_args_and_config(return_remaining_strings=True)
+
+    # add remaining args to config
+    for remaining_arg in remaining_args:
+        key, value = remaining_arg.split(":")
+        # TODO this is a hack to convert the string to the correct type
+        setattr(config, key, int(value))
 
     if args.output_global_parent_dir is not None:
         run_id = os.path.basename(os.getcwd())

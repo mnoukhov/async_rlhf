@@ -44,6 +44,77 @@ from trl.trainer.utils import (
 from src.utils import prepare_deepspeed
 
 
+def get_min_max_responses(
+    responses: torch.Tensor,
+    postprocessed_response: torch.Tensor,
+    scores: torch.Tensor,
+    logprobs: torch.Tensor,
+    ref_logprobs: torch.Tensor,
+    sequence_lengths: torch.Tensor,
+    rloo_k: int,
+    strategy_k: int,
+):
+    """Returns the rloo_k responses with the highest and lowest scores per query"""
+    scores_reshaped = scores.view(-1, strategy_k * rloo_k)
+    responses_reshaped = responses.view(-1, strategy_k * rloo_k, responses.shape[1])
+    postprocessed_response_reshaped = postprocessed_response.view(
+        -1, strategy_k * rloo_k, postprocessed_response.shape[1]
+    )
+    logprobs = logprobs.view(-1, strategy_k * rloo_k, logprobs.shape[1])
+    ref_logprobs = ref_logprobs.view(-1, strategy_k * rloo_k, ref_logprobs.shape[1])
+    sequence_lengths = sequence_lengths.view(-1, strategy_k * rloo_k)
+
+    sorted_indices = torch.argsort(scores_reshaped, dim=1)
+
+    # take rloo_k / 2 from bottom and same from top
+    min_indices = sorted_indices[:, : rloo_k // 2]
+    max_indices = sorted_indices[:, -rloo_k // 2 :]
+
+    scores_min = scores_reshaped.gather(1, min_indices)  # bs , rloo_k / 2
+    scores_max = scores_reshaped.gather(1, max_indices)
+
+    scores = torch.cat([scores_min, scores_max], dim=1).view(-1)
+
+    responses_min = responses_reshaped.gather(1, min_indices.unsqueeze(2).expand(-1, -1, responses_reshaped.shape[2]))
+    responses_max = responses_reshaped.gather(1, max_indices.unsqueeze(2).expand(-1, -1, responses_reshaped.shape[2]))
+
+    responses = torch.cat([responses_min, responses_max], dim=1).view(
+        -1, responses_reshaped.shape[2]
+    )  # bs x rloo_k , len
+
+    postprocessed_response_min = postprocessed_response_reshaped.gather(
+        1, min_indices.unsqueeze(2).expand(-1, -1, postprocessed_response_reshaped.shape[2])
+    )
+    postprocessed_response_max = postprocessed_response_reshaped.gather(
+        1, max_indices.unsqueeze(2).expand(-1, -1, postprocessed_response_reshaped.shape[2])
+    )
+
+    postprocessed_response = torch.cat([postprocessed_response_min, postprocessed_response_max], dim=1).view(
+        -1, postprocessed_response_reshaped.shape[2]
+    )
+
+    logprobs_min = logprobs.gather(1, min_indices.unsqueeze(2).expand(-1, -1, logprobs.shape[2]))
+    logprobs_max = logprobs.gather(1, max_indices.unsqueeze(2).expand(-1, -1, logprobs.shape[2]))
+    logprobs = torch.cat([logprobs_min, logprobs_max], dim=1).view(-1, logprobs.shape[2])
+
+    ref_logprobs_min = ref_logprobs.gather(1, min_indices.unsqueeze(2).expand(-1, -1, ref_logprobs.shape[2]))
+    ref_logprobs_max = ref_logprobs.gather(1, max_indices.unsqueeze(2).expand(-1, -1, ref_logprobs.shape[2]))
+    ref_logprobs = torch.cat([ref_logprobs_min, ref_logprobs_max], dim=1).view(-1, ref_logprobs.shape[2])
+
+    sequence_lengths_min = sequence_lengths.gather(1, min_indices)
+    sequence_lengths_max = sequence_lengths.gather(1, max_indices)
+    sequence_lengths = torch.cat([sequence_lengths_min, sequence_lengths_max], dim=1).view(-1)
+
+    return (
+        responses,
+        postprocessed_response,
+        scores,
+        logprobs,
+        ref_logprobs,
+        sequence_lengths,
+    )
+
+
 @dataclass
 class OnlineTrainerState(TrainerState):
     episode: int = 0
@@ -69,8 +140,10 @@ class MyRLOOTrainer(Trainer):
         # model_init: Optional[Callable[[torch.nn.Module], None]] = None,
         callbacks: Optional[List[TrainerCallback]] = None,
     ) -> None:
+        config.strategy_k = 2
         self.args = config
         args = config
+
         self.tokenizer = tokenizer
         self.policy = policy
 
@@ -130,7 +203,6 @@ class MyRLOOTrainer(Trainer):
             args.rloo_k,
             "`local_batch_size` must be a multiple of rloo_k",
         )  # RLOO logic: needed because RLOO repeats the same prompt args.rloo_k times
-
         #########
         # setup model, optimizer, and others
         #########
@@ -283,7 +355,7 @@ class MyRLOOTrainer(Trainer):
             data = next(iter_dataloader)
             with torch.no_grad():
                 queries = data["input_ids"].to(device)
-                queries = queries.repeat(args.rloo_k, 1)
+                queries = queries.repeat(args.rloo_k * args.strategy_k, 1)
                 context_length = queries.shape[1]
                 query_responses = []
                 responses = []
@@ -345,9 +417,28 @@ class MyRLOOTrainer(Trainer):
                 ref_logprobs = torch.cat(ref_logprobs, 0)
                 sequence_lengths = torch.cat(sequence_lengths, 0)
                 scores = torch.cat(scores, 0)
+
                 del (logprob, ref_logprob, score)
                 torch.cuda.empty_cache()
                 gc.collect()
+
+                (
+                    responses,
+                    postprocessed_responses,
+                    scores,
+                    logprobs,
+                    ref_logprobs,
+                    sequence_lengths,
+                ) = get_min_max_responses(
+                    responses,
+                    postprocessed_responses,
+                    scores,
+                    logprobs,
+                    ref_logprobs,
+                    sequence_lengths,
+                    args.rloo_k,
+                    args.strategy_k,
+                )
 
                 # Response Processing 3. filter response. Ensure that the sample contains stop_token_id
                 # responses not passing that filter will receive a low (fixed) score
