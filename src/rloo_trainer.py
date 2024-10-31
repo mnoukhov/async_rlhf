@@ -390,7 +390,6 @@ class MyRLOOTrainer(Trainer):
                             mb_advantage = advantages[micro_batch_inds]
                             mb_responses = responses[micro_batch_inds]
                             mb_query_responses = query_responses[micro_batch_inds]
-                            mb_logprobs = logprobs[micro_batch_inds]
                             mb_ref_logprobs = ref_logprobs[micro_batch_inds]
 
                             output = forward(model, mb_query_responses, tokenizer.pad_token_id)
@@ -427,7 +426,7 @@ class MyRLOOTrainer(Trainer):
                     del (
                         output, logits, new_all_logprobs, new_logprobs,
                         loss, prob_dist, entropy,
-                        mb_advantage, mb_responses, mb_query_responses, mb_logprobs,
+                        mb_advantage, mb_responses, mb_query_responses,
                     )
                     # fmt: on
                     torch.cuda.empty_cache()
