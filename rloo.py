@@ -10,9 +10,9 @@ from transformers import (
     AutoTokenizer,
 )
 from trl import ModelConfig
-from trl.trainer.rloo_trainer import RLOOConfig
 
 from src.online_bok_trainer import OnlineBoKTrainer
+from src.rloo_trainer import MyRLOOConfig as RLOOConfig
 from src.rloo_trainer import MyRLOOTrainer as RLOOTrainer
 from src.utils import TRLParser, WandbLogModelConfig
 
