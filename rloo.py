@@ -63,6 +63,13 @@ if __name__ == "__main__":
         run_id = os.path.basename(os.getcwd())
         output_dir_basename = os.path.basename(config.output_dir)
         os.environ["WANDB_RUN_ID"] = run_id + "_" + output_dir_basename
+    elif args.wandb_run_id == "slurm":
+        run_id = os.environ["SLURM_JOB_ID"]
+        config_name = os.path.basename(config.output_dir)
+        # save to parent / slurm id / output_dir
+        if args.output_global_parent_dir is not None:
+            config.output_dir = os.path.join(args.output_global_parent_dir, run_id, config.output_dir)
+        os.environ["WANDB_RUN_ID"] = run_id + "_" + config_name
     else:
         os.environ["WANDB_RUN_ID"] = args.wandb_run_id
 
