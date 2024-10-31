@@ -14,7 +14,7 @@ num_ppo_epochs: 1
 num_mini_batches: 1 
 learning_rate: 3.0e-6
 per_device_train_batch_size: 16
-gradient_accumulation_steps: 8
+gradient_accumulation_steps: 32
 model_name_or_path: mnoukhov/pythia410m-sft-tldr
 sft_model_path: mnoukhov/pythia410m-sft-tldr
 reward_model_path: mnoukhov/pythia410m-rm-tldr6.9b
