@@ -1,11 +1,12 @@
-output_global_parent_dir: /home/toolkit/trl_summarize/results
-wandb_run_id: snow
+output_global_parent_dir: results
+wandb_run_id: slurm
 output_dir: rloo_pythia410m_tldr6.9b
 run_name: rloo_pythia410m_tldr6.9b
 dataset_name: vwxyzjn/summarize_from_feedback_tldr_3_filtered_oai_preprocessing_1706381144
 dataset_test_split: validation
 max_length: 512
 fp16: True
+torch_dtype: float16
 ## ppo stuff
 total_episodes: 131072
 response_length: 53
