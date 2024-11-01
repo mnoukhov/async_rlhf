@@ -12,10 +12,8 @@ from tqdm.auto import tqdm
 from transformers import pipeline
 from transformers.pipelines.pt_utils import KeyDataset
 
-import src.perplexity
 import wandb
 from src.utils import TRLParser
-
 
 builder.has_sufficient_disk_space = lambda needed_bytes, directory=".": True
 
@@ -187,7 +185,7 @@ if __name__ == "__main__":
         generations[first_ckpt].dataset = generations[first_ckpt].dataset.select(range(100))
         reference.dataset = reference.dataset.select(range(100))
 
-    if args.wandb_run_id == "snow":
+    if args.wandb_run_id == "slurm":
         # remove extra / at end
         normpath = os.path.normpath(args.model_name_or_path)
         path_parts = normpath.split("/")

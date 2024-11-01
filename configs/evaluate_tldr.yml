@@ -1,5 +1,5 @@
 # model_name_or_path: /home/toolkit/snapshots/fa0277d307db882ff9735fe0edc03cfb24a59442/dpo_pythia410m_tldr
-wandb_run_id: snow
+wandb_run_id: slurm
 ref_model_name: mnoukhov/pythia410m-sft-tldr
 gold_model_name: cleanrl/EleutherAI_pythia-6.9b-deduped__reward__tldr
 gold_tokenizer_name: EleutherAI/pythia-6.9b-deduped
