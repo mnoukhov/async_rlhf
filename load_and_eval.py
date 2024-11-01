@@ -7,15 +7,13 @@ import numpy as np
 import torch
 from accelerate import PartialState
 from accelerate.utils import gather_object
-from datasets import builder, load_from_disk
+from datasets import load_from_disk
 from tqdm.auto import tqdm
 from transformers import pipeline
 from transformers.pipelines.pt_utils import KeyDataset
 
 import wandb
 from src.utils import TRLParser
-
-builder.has_sufficient_disk_space = lambda needed_bytes, directory=".": True
 
 
 @dataclass
