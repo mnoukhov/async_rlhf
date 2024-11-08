@@ -253,6 +253,10 @@ class MyRLOOTrainer(Trainer):
         stats_shape = (args.num_ppo_epochs, args.num_mini_batches, args.gradient_accumulation_steps)
         pg_loss_stats = torch.zeros(stats_shape, device=device)
         entropy_stats = torch.zeros(stats_shape, device=device)
+        approxkl_stats = torch.zeros(stats_shape, device=device)
+        ratio_stats = torch.zeros(stats_shape, device=device)
+        pg_clipfrac_stats = torch.zeros(stats_shape, device=device)
+
         model.train()
         self.state.max_steps = args.num_updates
         self.state.num_train_epochs = args.total_episodes / self.train_dataset_len
@@ -400,20 +404,31 @@ class MyRLOOTrainer(Trainer):
                             new_logprobs = torch.masked_fill(
                                 new_logprobs, padding_mask[micro_batch_inds], INVALID_LOGPROB
                             )
+                            new_ratio = (new_logprobs - mb_logprobs).exp()
                             new_logprobs = new_logprobs.sum(1)
-                            if args.importance_sampling:
-                                new_logprobs = new_logprobs - mb_ref_logprobs.sum(1)
-
-                            loss = -mb_advantage * new_logprobs
-                            loss = loss.mean()
+                            mb_logprobs = mb_logprobs.sum(1)
+                            logprobs_diff = new_logprobs - mb_logprobs
+                            ratio = torch.exp(logprobs_diff)
+                            pg_losses = -mb_advantage * ratio
+                            pg_losses2 = -mb_advantage * torch.clamp(ratio, 1.0 - args.cliprange, 1.0 + args.cliprange)
+                            pg_loss_max = torch.max(pg_losses, pg_losses2)
+                            pg_loss = pg_loss_max.mean()
+                            loss = pg_loss
                             accelerator.backward(loss)
                             optimizer.step()
                             optimizer.zero_grad()
                             with torch.no_grad():
-                                pg_loss_stats[ppo_epoch_idx, minibatch_idx, gradient_accumulation_idx] = loss
+                                pg_clipfrac = (pg_losses2 > pg_losses).float().mean()
                                 prob_dist = torch.nn.functional.softmax(logits, dim=-1)
                                 entropy = torch.logsumexp(logits, dim=-1) - torch.sum(prob_dist * logits, dim=-1)
+                                approxkl = 0.5 * (logprobs_diff**2).mean()
+                                approxkl_stats[ppo_epoch_idx, minibatch_idx, gradient_accumulation_idx] = approxkl
+                                pg_clipfrac_stats[ppo_epoch_idx, minibatch_idx, gradient_accumulation_idx] = (
+                                    pg_clipfrac
+                                )
+                                pg_loss_stats[ppo_epoch_idx, minibatch_idx, gradient_accumulation_idx] = pg_loss
                                 entropy_stats[ppo_epoch_idx, minibatch_idx, gradient_accumulation_idx] = entropy.mean()
+                                ratio_stats[ppo_epoch_idx, minibatch_idx, gradient_accumulation_idx] = new_ratio.mean()
                         gradient_accumulation_idx += 1
                     minibatch_idx += 1
                     self.state.global_step += 1
@@ -442,8 +457,12 @@ class MyRLOOTrainer(Trainer):
                 metrics["objective/non_score_reward"] = self.accelerator.gather(mean_non_score_reward).mean().item()
                 metrics["objective/rlhf_reward"] = self.accelerator.gather(rlhf_reward).mean().item()
                 metrics["objective/scores"] = self.accelerator.gather(scores.mean()).mean().item()
+                metrics["policy/approxkl_avg"] = self.accelerator.gather(approxkl_stats).mean().item()
+                metrics["policy/clipfrac_avg"] = self.accelerator.gather(pg_clipfrac_stats).mean().item()
                 metrics["loss/policy_avg"] = self.accelerator.gather(pg_loss_stats).mean().item()
                 metrics["policy/entropy_avg"] = self.accelerator.gather(entropy_stats).mean().item()
+                metrics["val/ratio"] = self.accelerator.gather(ratio_stats).mean().item()
+                metrics["val/ratio_var"] = self.accelerator.gather(ratio_stats).var().item()
                 metrics["val/num_eos_tokens"] = (responses == tokenizer.eos_token_id).sum().item()
                 metrics["lr"] = self.lr_scheduler.get_last_lr()[0]
                 metrics["episode"] = self.state.episode
