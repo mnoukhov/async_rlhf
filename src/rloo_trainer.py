@@ -394,7 +394,7 @@ class MyRLOOTrainer(Trainer):
                             mb_advantage = advantages[micro_batch_inds]
                             mb_responses = responses[micro_batch_inds]
                             mb_query_responses = query_responses[micro_batch_inds]
-                            mb_ref_logprobs = ref_logprobs[micro_batch_inds]
+                            mb_logprobs = logprobs[micro_batch_inds]
 
                             output = forward(model, mb_query_responses, tokenizer.pad_token_id)
                             logits = output.logits[:, context_length - 1 : -1]
