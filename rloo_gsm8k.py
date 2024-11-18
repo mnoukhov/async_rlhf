@@ -5,14 +5,10 @@ from typing import Optional
 
 import torch
 from datasets import load_dataset
-from transformers import (
-    AutoModelForCausalLM,
-    AutoModelForSequenceClassification,
-    AutoTokenizer,
-)
+from transformers import AutoModelForCausalLM, AutoTokenizer, DataCollatorForTokenClassification
 from trl import ModelConfig
 
-from src.online_bok_trainer import OnlineBoKTrainer
+from src.gsm8k_utils import GSM8k_PROMPT, MathRewardModel, extract_answer
 from src.rloo_trainer import MyRLOOConfig as RLOOConfig
 from src.rloo_trainer import MyRLOOTrainer as RLOOTrainer
 from src.utils import TRLParser, WandbLogModelConfig
@@ -22,14 +18,10 @@ from src.utils import TRLParser, WandbLogModelConfig
 class ScriptArguments:
     output_global_parent_dir: str = field(default=None)
     dataset_name: str = field(default=None, metadata={"help": "the dataset name"})
-    # dataset_text_field: str = field(default=None, metadata={"help": "the text field of the dataset"})
+    dataset_subset: str = field(default="main", metadata={"help": "the dataset name"})
     dataset_train_split: str = field(default="train", metadata={"help": "the name of the training set of the dataset"})
     dataset_test_split: str = field(default="test", metadata={"help": "the name of the training set of the dataset"})
-    # output_model_name: str = field(default="", metadata={"help": "model name to upload"})
-    max_length: int = field(default=512, metadata={"help": "The maximum sequence length for SFT Trainer"})
     config: str = field(default=None, metadata={"help": "Path to the optional config file"})
-    vllm: bool = field(default=False)
-    bok: bool = field(default=False)
     wandb_run_id: Optional[str] = field(default=None)
 
 
@@ -37,11 +29,18 @@ def prepare_dataset(dataset, tokenizer):
     """pre-tokenize the dataset before training; only collate during training"""
 
     def tokenize(element):
+        question_prompts = [GSM8k_PROMPT.format(question) for question in element["question"]]
         input_ids = tokenizer(
-            element["query"],
+            question_prompts,
             padding=False,
         )["input_ids"]
-        return {"input_ids": input_ids, "lengths": [len(ids) for ids in input_ids]}
+        # answers = [ans.split("####")[1].strip() for ans in element["answer"]]
+        answers = [extract_answer(ans) for ans in element["answer"]]
+        answer_ids = tokenizer(
+            answers,
+            padding=False,
+        )["input_ids"]
+        return {"input_ids": input_ids, "lengths": [len(ids) for ids in input_ids], "labels": answer_ids}
 
     return dataset.map(
         tokenize,
@@ -55,16 +54,17 @@ if __name__ == "__main__":
     parser = TRLParser((ScriptArguments, RLOOConfig, ModelConfig))
     args, config, model_config = parser.parse_args_and_config()
 
+    if args.output_global_parent_dir is not None:
+        run_id = os.path.basename(os.getcwd())
+        config.output_dir = os.path.join(args.output_global_parent_dir, run_id, config.output_dir)
+
     if args.wandb_run_id == "slurm":
         run_id = os.environ["SLURM_JOB_ID"]
         config_name = os.path.basename(config.output_dir)
         # save to parent / slurm id / output_dir
         if args.output_global_parent_dir is not None:
             config.output_dir = os.path.join(args.output_global_parent_dir, run_id, config.output_dir)
-
         os.environ["WANDB_RUN_ID"] = run_id + "_" + config_name
-    else:
-        os.environ["WANDB_RUN_ID"] = args.wandb_run_id
 
     ################
     # Model & Tokenizer
@@ -74,29 +74,38 @@ if __name__ == "__main__":
         padding_side="left",
         trust_remote_code=True,
     )
+    tokenizer.pad_token = tokenizer.eos_token
 
     torch_dtype = (
         model_config.torch_dtype
         if model_config.torch_dtype in ["auto", None]
         else getattr(torch, model_config.torch_dtype)
     )
-
-    reward_model = AutoModelForSequenceClassification.from_pretrained(
-        config.reward_model_path, num_labels=1, torch_dtype=torch_dtype
+    reward_model = MathRewardModel(tokenizer=tokenizer)
+    ref_policy = AutoModelForCausalLM.from_pretrained(
+        config.sft_model_path,
+        torch_dtype=torch_dtype,
+        # attn_implementation="flash_attention_2",
     )
-    ref_policy = AutoModelForCausalLM.from_pretrained(config.sft_model_path, torch_dtype=torch_dtype)
-    policy_dtype = torch_dtype if torch_dtype != torch.float16 else torch.float32
-    policy = AutoModelForCausalLM.from_pretrained(config.sft_model_path, torch_dtype=policy_dtype)
+    policy = AutoModelForCausalLM.from_pretrained(
+        config.sft_model_path,
+        torch_dtype=torch_dtype,
+        # attn_implementation="flash_attention_2",
+    )
     ################
     # Dataset
     ################
-    raw_datasets = load_dataset(args.dataset_name)
+    raw_datasets = load_dataset(args.dataset_name, data_dir=args.dataset_subset)
     if config.sanity_check:
         for key in raw_datasets:
             raw_datasets[key] = raw_datasets[key].select(range(1024))
         config.push_to_hub = False
         config.report_to = ""
         config.save_strategy = "no"
+        # config.total_episodes = 2048
+        # config.per_device_train_batch_size = 4
+        # config.gradient_accumulation_steps = 4
+        # config.local_rollout_forward_batch_size = 8
         config.num_sample_generations = 0
 
     train_dataset = raw_datasets[args.dataset_train_split]
@@ -104,20 +113,15 @@ if __name__ == "__main__":
 
     train_dataset = prepare_dataset(train_dataset, tokenizer)
     eval_dataset = prepare_dataset(eval_dataset, tokenizer)
-    # filtering
-    train_dataset = train_dataset.filter(lambda x: x["lengths"] <= args.max_length)
-    eval_dataset = eval_dataset.filter(lambda x: x["lengths"] <= args.max_length)
     assert train_dataset[0]["input_ids"][-1] != tokenizer.eos_token_id, "The last token should not be an EOS token"
+
+    space_padding_id = tokenizer.encode(" ", add_special_tokens=False)[0]
+    data_collator = DataCollatorForTokenClassification(tokenizer, label_pad_token_id=space_padding_id)
     ################
     # Training
     ################
 
-    if args.bok:
-        TrainerCls = OnlineBoKTrainer
-    else:
-        TrainerCls = RLOOTrainer
-
-    trainer = TrainerCls(
+    trainer = RLOOTrainer(
         config=config,
         tokenizer=tokenizer,
         policy=policy,
@@ -126,6 +130,7 @@ if __name__ == "__main__":
         train_dataset=train_dataset,
         eval_dataset=eval_dataset,
         callbacks=[WandbLogModelConfig(model_config)],
+        data_collator=data_collator,
     )
     trainer.train()
 

@@ -36,7 +36,8 @@ class MathRewardModel(nn.Module):
         responses = self.tokenizer.batch_decode(postprocessed_responses)
         pred_answers = [extract_answer(response) for response in responses]
 
-        label_answers = self.tokenizer.batch_decode(label_answer_ids)
+        label_texts = self.tokenizer.batch_decode(label_answer_ids)
+        label_answers = [text.strip(self.tokenizer.bos_token + self.tokenizer.eos_token + " ") for text in label_texts]
         result = [pred == label for pred, label in zip(pred_answers, label_answers)]
         result_tensor = torch.tensor(result, device=label_answer_ids.device)
         # reward of 1 for correct, 0 for incorrect
