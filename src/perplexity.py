@@ -17,11 +17,12 @@ class PerplexityPipeline(Pipeline):
         inputs = (inputs,)
         return super().__call__(*inputs, **kwargs)
 
-    def _sanitize_parameters(self, prompt_template="TL;DR:", dataset_text_field=None, **tokenizer_kwargs):
-        self.prompt_template = prompt_template
-        self.prompt_template_tokens = self.tokenizer.encode(
-            self.prompt_template, add_special_tokens=False, return_tensors="pt"
-        ).squeeze()
+    def _sanitize_parameters(self, prompt_template=None, dataset_text_field=None, **tokenizer_kwargs):
+        if prompt_template is not None:
+            self.prompt_template = prompt_template
+            self.prompt_template_tokens = self.tokenizer.encode(
+                self.prompt_template, add_special_tokens=False, return_tensors="pt"
+            ).squeeze()
         preprocess_params = {"dataset_text_field": dataset_text_field, **tokenizer_kwargs}
 
         postprocess_params = {}
@@ -98,13 +99,26 @@ if __name__ == "__main__":
     from transformers import pipeline
 
     query_response = [
-        "This is a post\n TL;DR: This is a summary ",
-        "This is another post\n TL;DR: This is another summary ",
+        # "This is a post\n TL;DR: This is a summary ",
+        # "This is another post\n TL;DR: This is another summary ",
+        "[MATH_TASK] Problem:\nJanet’s ducks lay 16 eggs per day. She eats three for breakfast every morning and bakes muffins for her friends every day with four. She sells the remainder at the farmers' market daily for $2 per fresh duck egg. How much in dollars does she make every day at the farmers' market?\n\nSolution:\nShe has a daily egg production of 16 eggs - 3 eggs for breakfast = 13 eggs\nShe sells 13 eggs * $2 per egg = $26 every day at the farmers' market\n#### 26\n</s>",
     ]
 
     ppl_pipeline = pipeline(
         task="perplexity",
-        model="mnoukhov/pythia410m-sft-tldr",
+        model="realtreetune/rho-1b-sft-GSM8K",
+        # model_revision="main",
+        device="cuda",
+        prompt_template="\nSolution:",
     )
 
-    ppls = ppl_pipeline(query_response, prompt_template="TL;DR:")
+    if ppl_pipeline.tokenizer.pad_token_id is None:
+        ppl_pipeline.tokenizer.pad_token_id = ppl_pipeline.tokenizer.eos_token_id
+
+    ppl_pipeline.prompt_template_tokens = ppl_pipeline.prompt_template_tokens[1:]
+
+    print(
+        ppl_pipeline(
+            query_response,
+        )
+    )

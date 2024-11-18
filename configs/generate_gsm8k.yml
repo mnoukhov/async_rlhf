@@ -1,0 +1,8 @@
+# model_name_or_path: /home/toolkit/snapshots/fa0277d307db882ff9735fe0edc03cfb24a59442/dpo_pythia410m_tldr
+save_generations: True
+dataset_name: openai/gsm8k
+split: test
+max_new_tokens: 400
+temperature: 0.35
+top_p: 0.95
+torch_dtype: bfloat16

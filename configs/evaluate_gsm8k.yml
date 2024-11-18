@@ -1,0 +1,5 @@
+# model_name_or_path: /home/toolkit/snapshots/fa0277d307db882ff9735fe0edc03cfb24a59442/dpo_pythia410m_tldr
+wandb_run_id: slurm
+ref_model_name: realtreetune/rho-1b-sft-GSM8K
+batch_size: 8
+torch_dtype: bfloat16
