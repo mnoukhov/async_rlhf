@@ -13,8 +13,8 @@ from transformers import pipeline
 from transformers.pipelines.pt_utils import KeyDataset
 
 import wandb
-from src.utils import TRLParser
 from src.gsm8k_utils import extract_answer
+from src.utils import TRLParser
 
 
 @dataclass

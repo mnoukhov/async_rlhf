@@ -56,10 +56,6 @@ if __name__ == "__main__":
     parser = TRLParser((ScriptArguments, RLOOVLLMConfig, ModelConfig))
     args, config, model_config = parser.parse_args_and_config()
 
-    if args.output_global_parent_dir is not None:
-        run_id = os.path.basename(os.getcwd())
-        config.output_dir = os.path.join(args.output_global_parent_dir, run_id, config.output_dir)
-
     if args.wandb_run_id == "slurm":
         run_id = os.environ["SLURM_JOB_ID"]
         config_name = os.path.basename(config.output_dir)
@@ -99,8 +95,8 @@ if __name__ == "__main__":
     ################
     raw_datasets = load_dataset(args.dataset_name, data_dir=args.dataset_subset)
     if config.sanity_check:
-        for key in raw_datasets:
-            raw_datasets[key] = raw_datasets[key].select(range(1024))
+        # for key in raw_datasets:
+        #     raw_datasets[key] = raw_datasets[key].select(range(1024))
         config.push_to_hub = False
         config.report_to = ""
         config.save_strategy = "no"
@@ -108,7 +104,7 @@ if __name__ == "__main__":
         # config.per_device_train_batch_size = 4
         # config.gradient_accumulation_steps = 4
         # config.local_rollout_forward_batch_size = 8
-        config.num_sample_generations = 0
+        # config.num_sample_generations = 0
 
     train_dataset = raw_datasets[args.dataset_train_split]
     eval_dataset = raw_datasets[args.dataset_test_split]

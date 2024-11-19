@@ -119,7 +119,7 @@ class RLOOSingleVLLMTrainer(Trainer):
             args.batch_size,
             f" total_episodes {args.total_episodes} should be divisible by batch_size {args.batch_size} ",
         )
-        args.num_updates = self.num_batches * args.num_mini_batches
+        args.num_updates = self.num_batches * args.num_mini_batches * args.num_ppo_epochs
         self.local_seed = args.seed + accelerator.process_index * 100003  # Prime
         if args.num_sample_generations > 0:
             self.sample_generations_freq = max(1, self.num_batches // args.num_sample_generations)
