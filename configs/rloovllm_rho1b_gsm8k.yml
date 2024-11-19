@@ -3,6 +3,7 @@ output_dir: rloo_rho1b_gsm8k
 run_name: rloo_rho1b_gsm8k
 dataset_name: openai/gsm8k
 dataset_test_split: test
+num_sample_completions: 0
 # max_length: 512
 bf16: True
 torch_dtype: bfloat16

@@ -22,7 +22,6 @@ from transformers import (
     Trainer,
     TrainerCallback,
     TrainerControl,
-    TrainerState,
 )
 from transformers.integrations import get_reporting_integration_callbacks
 from transformers.trainer import DEFAULT_CALLBACKS, DEFAULT_PROGRESS_CALLBACK
