@@ -11,6 +11,7 @@ from trl import ModelConfig
 from src.gsm8k_utils import GSM8k_PROMPT, MathRewardModel, extract_answer
 from src.rloo_trainer import MyRLOOConfig as RLOOConfig
 from src.rloo_trainer import MyRLOOTrainer as RLOOTrainer
+from src.rloo_trainer_single_vllm import RLOOSingleVLLMTrainer, RLOOVLLMConfig
 from src.utils import TRLParser, WandbLogModelConfig
 
 
@@ -23,6 +24,7 @@ class ScriptArguments:
     dataset_test_split: str = field(default="test", metadata={"help": "the name of the training set of the dataset"})
     config: str = field(default=None, metadata={"help": "Path to the optional config file"})
     wandb_run_id: Optional[str] = field(default=None)
+    vllm: bool = False
 
 
 def prepare_dataset(dataset, tokenizer):
@@ -51,7 +53,7 @@ def prepare_dataset(dataset, tokenizer):
 
 
 if __name__ == "__main__":
-    parser = TRLParser((ScriptArguments, RLOOConfig, ModelConfig))
+    parser = TRLParser((ScriptArguments, RLOOVLLMConfig, ModelConfig))
     args, config, model_config = parser.parse_args_and_config()
 
     if args.output_global_parent_dir is not None:
@@ -85,12 +87,12 @@ if __name__ == "__main__":
     ref_policy = AutoModelForCausalLM.from_pretrained(
         config.sft_model_path,
         torch_dtype=torch_dtype,
-        # attn_implementation="flash_attention_2",
+        attn_implementation="flash_attention_2",
     )
     policy = AutoModelForCausalLM.from_pretrained(
         config.sft_model_path,
         torch_dtype=torch_dtype,
-        # attn_implementation="flash_attention_2",
+        attn_implementation="flash_attention_2",
     )
     ################
     # Dataset
@@ -121,7 +123,12 @@ if __name__ == "__main__":
     # Training
     ################
 
-    trainer = RLOOTrainer(
+    if args.vllm:
+        TrainerCls = RLOOSingleVLLMTrainer
+    else:
+        TrainerCls = RLOOTrainer
+
+    trainer = TrainerCls(
         config=config,
         tokenizer=tokenizer,
         policy=policy,

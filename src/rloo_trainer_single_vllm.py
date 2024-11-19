@@ -28,7 +28,6 @@ from transformers.integrations import get_reporting_integration_callbacks
 from transformers.trainer import DEFAULT_CALLBACKS, DEFAULT_PROGRESS_CALLBACK
 from transformers.trainer_callback import CallbackHandler, PrinterCallback
 from trl.models.utils import unwrap_model_for_generation
-from trl.trainer.rloo_config import RLOOConfig
 from trl.trainer.rloo_trainer import INVALID_LOGPROB
 from trl.trainer.utils import (
     disable_dropout_in_model,
@@ -40,25 +39,24 @@ from trl.trainer.utils import (
     print_rich_table,
     truncate_response,
 )
+from vllm import LLM, SamplingParams
 
+from src.rloo_trainer import MyRLOOConfig, OnlineTrainerState
 from src.utils import prepare_deepspeed
 
 
 @dataclass
-class OnlineTrainerState(TrainerState):
-    episode: int = 0
+class RLOOVLLMConfig(MyRLOOConfig):
+    sync: bool = True
+    vllm_device: str = None
+    "default will put it on accelerate.num_processes + 1"
+    vllm_gpu_memory_utilization: float = 0.9
 
 
-@dataclass
-class MyRLOOConfig(RLOOConfig):
-    importance_sampling: bool = False
-    top_p: float = 1.0
-
-
-class MyRLOOTrainer(Trainer):
+class RLOOSingleVLLMTrainer(Trainer):
     def __init__(
         self,
-        config: RLOOConfig,
+        config: RLOOVLLMConfig,
         tokenizer: PreTrainedTokenizer,
         policy: nn.Module,
         ref_policy: nn.Module,
@@ -79,11 +77,6 @@ class MyRLOOTrainer(Trainer):
         args = config
         self.tokenizer = tokenizer
         self.policy = policy
-
-        self.policy.generation_config.eos_token_id = (
-            None  # disable `pad_token_id` and `eos_token_id` because we just want to
-        )
-        self.policy.generation_config.pad_token_id = None  # generate tokens without truncation / padding
 
         self.ref_policy = ref_policy
         self.reward_model = reward_model
@@ -238,14 +231,6 @@ class MyRLOOTrainer(Trainer):
                 yield from dataloader
 
         iter_dataloader = iter(repeat_generator())
-        generation_config = GenerationConfig(
-            max_new_tokens=args.response_length,
-            min_new_tokens=args.response_length,
-            temperature=(args.temperature + 1e-7),
-            top_k=0.0,
-            top_p=args.top_p,
-            do_sample=True,
-        )
 
         accelerator.print("===training policy===")
         self.state.global_step = 0
@@ -281,78 +266,208 @@ class MyRLOOTrainer(Trainer):
             else:
                 self.state.save_steps = args.save_steps
 
+        sampling_params = SamplingParams(
+            temperature=(args.temperature + 1e-7),
+            top_p=args.top_p,
+            max_tokens=args.response_length,
+            include_stop_str_in_output=True,
+            # logprobs=1,
+        )
+
+        if accelerator.is_main_process:
+            if args.fp16:
+                vllm_dtype = torch.float16
+            elif args.bf16:
+                vllm_dtype = torch.bfloat16
+            else:
+                vllm_dtype = torch.float32
+            vllm_device = args.vllm_device or f"cuda:{accelerator.num_processes}"
+            llm = LLM(
+                model=args.sft_model_path,
+                revision="main",
+                tokenizer_revision="main",
+                tensor_parallel_size=1,
+                device=vllm_device,
+                dtype=vllm_dtype,
+                gpu_memory_utilization=args.vllm_gpu_memory_utilization,
+            )
+            accelerator.print(f"🔥🔥🔥 vllm loaded in {vllm_dtype}")
+
+        if self.args.sync:
+            next_queries = None
+            next_labels = None
+        else:
+            # send first batch of data to actor
+            data = next(iter_dataloader)
+            next_queries = data["input_ids"].to(device)
+            next_queries = next_queries.repeat(args.rloo_k, 1)
+            next_labels = data.get("labels", None)
+            if next_labels is not None:
+                next_labels = next_labels.repeat(args.rloo_k, 1)
+            next_g_queries_list = gather_object(next_queries.tolist())
+            if accelerator.is_main_process:
+                next_g_queries_list = [
+                    [inneritem for inneritem in item if inneritem != tokenizer.pad_token_id]
+                    for item in next_g_queries_list
+                ]  # remove padding
+                next_g_response_ids, next_g_response_lprobs = vllm_generate(
+                    llm, sampling_params, None, next_g_queries_list, True
+                )
+
+        DUMMY_PAD_TOKEN = 0  # we can't use tokenizer.pad_token_id because it's outside vocab and `torch.gather(all_logprob, 2, response.unsqueeze(-1))` will error out
         self.control = self.callback_handler.on_train_begin(args, self.state, self.control)
         for update in range(1, self.num_batches + 1):
             self.state.episode += 1 * args.batch_size
             self.lr_scheduler.step()
             data = next(iter_dataloader)
+            vllm_responses = torch.zeros(
+                (args.batch_size, args.response_length),
+                device=accelerator.device,
+                dtype=torch.long,
+            )
+            vllm_response_lprobs = torch.zeros(
+                (args.batch_size, args.response_length),
+                device=accelerator.device,
+                dtype=torch.float,
+            )
+            if not args.sync:
+                queries = next_queries
+                labels = next_labels
+                g_response_ids = next_g_response_ids
+                g_padded_response_ids = [
+                    list(response) + [DUMMY_PAD_TOKEN] * (args.response_length - len(response))
+                    for response in g_response_ids
+                ]
+                g_padded_response_ids = torch.tensor(g_padded_response_ids, device=device)
+                vllm_responses[:] = g_padded_response_ids
+
+                if next_g_response_lprobs is not None:
+                    g_response_lprobs = next_g_response_lprobs
+                    g_padded_response_lprobs = [
+                        list(response) + [DUMMY_PAD_TOKEN] * (args.response_length - len(response))
+                        for response in g_response_lprobs
+                    ]
+                    g_padded_response_lprobs = torch.tensor(g_padded_response_lprobs, device=device)
+                    vllm_response_lprobs[:] = g_padded_response_lprobs
+
             with torch.no_grad():
-                queries = data["input_ids"].to(device)
-                queries = queries.repeat(args.rloo_k, 1)
-                labels = data.get("labels", None)
-                if labels is not None:
-                    labels = labels.repeat(args.rloo_k, 1)
+                next_queries = data["input_ids"].to(device)
+                next_queries = next_queries.repeat(args.rloo_k, 1)
+                next_labels = data.get("labels", None)
+                if next_labels is not None:
+                    next_labels = next_labels.repeat(args.rloo_k, 1)
+
+                # with unwrap_model_for_generation(model, self.accelerator) as unwrapped_model:
+                next_g_queries_list = gather_object(next_queries.tolist())
+                if accelerator.is_main_process:
+                    next_g_queries_list = [
+                        [inneritem for inneritem in item if inneritem != tokenizer.pad_token_id]
+                        for item in next_g_queries_list
+                    ]  # remove padding
+
+                    # send next queries to be generated
+                    model_named_parameters = accelerator._get_named_parameters(model)
+                    next_g_response_ids, next_g_response_lprobs = vllm_generate(
+                        llm,
+                        sampling_params,
+                        model_named_parameters.items(),
+                        next_g_queries_list,
+                        log=(update % self.state.logging_steps == 0),
+                    )
+
+                    if args.sync:
+                        queries = next_queries
+                        labels = next_labels
+                        g_response_ids = next_g_response_ids
+                        g_padded_response_ids = [
+                            list(response) + [DUMMY_PAD_TOKEN] * (args.response_length - len(response))
+                            for response in g_response_ids
+                        ]
+                        g_padded_response_ids = torch.tensor(g_padded_response_ids, device=device)
+                        vllm_responses[:] = g_padded_response_ids
+
+                        if next_g_response_lprobs is not None:
+                            g_response_lprobs = next_g_response_lprobs
+                            g_padded_response_lprobs = [
+                                list(response) + [DUMMY_PAD_TOKEN] * (args.response_length - len(response))
+                                for response in g_response_lprobs
+                            ]
+                            g_padded_response_lprobs = torch.tensor(g_padded_response_lprobs, device=device)
+                            vllm_response_lprobs[:] = g_padded_response_lprobs
+
+                local_vllm_responses = vllm_responses[
+                    accelerator.local_process_index * queries.shape[0] : (accelerator.local_process_index + 1)
+                    * queries.shape[0]
+                ]
+                local_vllm_responses_lprobs = vllm_response_lprobs[
+                    accelerator.local_process_index * queries.shape[0] : (accelerator.local_process_index + 1)
+                    * queries.shape[0]
+                ]
+
+                query_responses = torch.cat((queries, local_vllm_responses), 1)
                 context_length = queries.shape[1]
-                query_responses = []
-                responses = []
+                responses = local_vllm_responses
                 postprocessed_responses = []
                 logprobs = []
                 ref_logprobs = []
                 scores = []
                 sequence_lengths = []
-                with unwrap_model_for_generation(model, self.accelerator) as unwrapped_model:
-                    for i in range(0, queries.shape[0], args.local_rollout_forward_batch_size):
-                        query = queries[i : i + args.local_rollout_forward_batch_size]
-                        if labels is not None:
-                            label = labels[i : i + args.local_rollout_forward_batch_size]
-                        query_response, logits = generate(
-                            unwrapped_model,
-                            query,
-                            tokenizer.pad_token_id,
-                            generation_config,
+                for i in range(0, queries.shape[0], args.local_rollout_forward_batch_size):
+                    query = queries[i : i + args.local_rollout_forward_batch_size]
+                    query_response = query_responses[i : i + args.local_rollout_forward_batch_size]
+                    if labels is not None:
+                        label = labels[i : i + args.local_rollout_forward_batch_size]
+                    response = query_response[:, context_length:]
+
+                    # use the logits during generation directly, instead of using the following
+                    # all_logprob = F.log_softmax(logits, dim=-1)
+                    # logprob = torch.gather(all_logprob, 2, response.unsqueeze(-1)).squeeze(-1)
+                    # del logits, all_logprob
+                    # torch.cuda.empty_cache()
+                    # logprob = local_vllm_responses_lprobs[i : i + args.local_rollout_forward_batch_size]
+
+                    # recalculate logprob for stability
+                    output = forward(model, query_response, tokenizer.pad_token_id)
+                    logits = output.logits[:, context_length - 1 : -1]
+                    logits /= args.temperature + 1e-7
+                    all_logprob = F.log_softmax(logits, dim=-1)
+                    logprob = torch.gather(all_logprob, 2, response.unsqueeze(-1)).squeeze(-1)
+                    del output, logits, all_logprob
+                    gc.collect()
+                    torch.cuda.empty_cache()
+
+                    ref_output = forward(ref_policy, query_response, tokenizer.pad_token_id)
+                    ref_logits = ref_output.logits[:, context_length - 1 : -1]
+                    ref_logits /= args.temperature + 1e-7
+                    ref_all_logprob = F.log_softmax(ref_logits, dim=-1)
+                    ref_logprob = torch.gather(ref_all_logprob, 2, response.unsqueeze(-1)).squeeze(-1)
+                    del ref_output, ref_logits, ref_all_logprob
+                    gc.collect()
+                    torch.cuda.empty_cache()
+
+                    # Response Processing 1. truncate response after the first occurrence of `stop_token_id`
+                    postprocessed_response = response
+                    if args.stop_token_id is not None:  # handle the edge case when stop_token_id exists but is 0
+                        postprocessed_response = truncate_response(
+                            args.stop_token_id, tokenizer.pad_token_id, response
                         )
-                        response = query_response[:, context_length:]
 
-                        # use the logits during generation directly, instead of using the following
-                        all_logprob = F.log_softmax(logits, dim=-1)
-                        logprob = torch.gather(all_logprob, 2, response.unsqueeze(-1)).squeeze(-1)
-                        del logits, all_logprob
-                        torch.cuda.empty_cache()
+                    # Response Processing 2. run reward model on the truncated responses
+                    postprocessed_query_response = torch.cat((query, postprocessed_response), 1)
+                    sequence_length = first_true_indices(postprocessed_response == tokenizer.pad_token_id) - 1
+                    if label is not None:
+                        score = reward_model(postprocessed_response, label)
+                    else:
+                        _, score, _ = get_reward(
+                            reward_model, postprocessed_query_response, tokenizer.pad_token_id, context_length
+                        )
 
-                        ref_output = forward(ref_policy, query_response, tokenizer.pad_token_id)
-                        ref_logits = ref_output.logits[:, context_length - 1 : -1]
-                        ref_logits /= args.temperature + 1e-7
-                        ref_all_logprob = F.log_softmax(ref_logits, dim=-1)
-                        ref_logprob = torch.gather(ref_all_logprob, 2, response.unsqueeze(-1)).squeeze(-1)
-                        del ref_output, ref_logits, ref_all_logprob
-                        torch.cuda.empty_cache()
-
-                        # Response Processing 1. truncate response after the first occurrence of `stop_token_id`
-                        postprocessed_response = response
-                        if args.stop_token_id is not None:  # handle the edge case when stop_token_id exists but is 0
-                            postprocessed_response = truncate_response(
-                                args.stop_token_id, tokenizer.pad_token_id, response
-                            )
-
-                        # Response Processing 2. run reward model on the truncated responses
-                        postprocessed_query_response = torch.cat((query, postprocessed_response), 1)
-                        sequence_length = first_true_indices(postprocessed_response == tokenizer.pad_token_id) - 1
-                        if label is not None:
-                            score = reward_model(postprocessed_response, label)
-                        else:
-                            _, score, _ = get_reward(
-                                reward_model, postprocessed_query_response, tokenizer.pad_token_id, context_length
-                            )
-
-                        query_responses.append(query_response)
-                        responses.append(response)
-                        postprocessed_responses.append(postprocessed_response)
-                        logprobs.append(logprob)
-                        ref_logprobs.append(ref_logprob)
-                        sequence_lengths.append(sequence_length)
-                        scores.append(score)
-                query_responses = torch.cat(query_responses, 0)
-                responses = torch.cat(responses, 0)
+                    postprocessed_responses.append(postprocessed_response)
+                    logprobs.append(logprob)
+                    ref_logprobs.append(ref_logprob)
+                    sequence_lengths.append(sequence_length)
+                    scores.append(score)
+                # responses = torch.cat(responses, 0)
                 postprocessed_responses = torch.cat(postprocessed_responses, 0)
                 logprobs = torch.cat(logprobs, 0)
                 ref_logprobs = torch.cat(ref_logprobs, 0)
@@ -535,3 +650,37 @@ class MyRLOOTrainer(Trainer):
 
             if wandb.run is not None:
                 wandb.log({"completions": wandb.Table(dataframe=df)})
+
+
+def vllm_generate(llm, sampling_params, model_named_parameters, g_queries_list, log=False):
+    llmp = llm.llm_engine.model_executor.driver_worker.model_runner.model
+    if model_named_parameters is None and g_queries_list is None:
+        print("model params and queries are None, exiting")
+        return
+
+    vllm_start_time = time.time()
+    if model_named_parameters:
+        # print("🔥🔥🔥 Loading weights using shared memory;" "we expect the generations to be completely different")
+        llmp.load_weights(model_named_parameters)
+        # if log:
+        #     print(f"load weights took: {time.time() - vllm_start_time:.2f} seconds")
+
+    outputs = llm.generate(prompt_token_ids=g_queries_list, sampling_params=sampling_params, use_tqdm=False)
+    if log:
+        print(
+            f"🏃🏃🏃 load and gen of {len(g_queries_list)} prompts took: {time.time() - vllm_start_time:.2f} seconds"
+        )
+
+    return_logprobs = sampling_params.logprobs is not None and sampling_params.logprobs > 0
+    response_token_ids = []
+    response_token_logprobs = [] if return_logprobs else None
+    for output in outputs:
+        token_ids = output.outputs[0].token_ids
+        response_token_ids.append(token_ids)
+
+        if return_logprobs:
+            all_logprobs = output.outputs[0].logprobs
+            token_logprobs = [logprob[token].logprob for logprob, token in zip(all_logprobs, token_ids)]
+            response_token_logprobs.append(token_logprobs)
+
+    return response_token_ids, response_token_logprobs
