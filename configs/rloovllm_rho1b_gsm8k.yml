@@ -13,6 +13,7 @@ vllm_gpu_memory_utilization: 0.3
 ## ppo stuff
 rloo_k: 8
 temperature: 0.6
+top_p: 0.9
 kl_coef: 1e-4
 total_episodes: 131072
 response_length: 400
