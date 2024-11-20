@@ -25,6 +25,7 @@ class EvalScriptArguments:
     wandb_run_id: Optional[str] = field(default=None)
     torch_dtype: Optional[str] = field(default="auto")
     batch_size: Optional[int] = field(default=16)
+    temperature: float = None
 
 
 def evaluate(args, all_prompts, all_reference, all_generations, all_episodes, log_to_wandb=False):
@@ -88,15 +89,14 @@ def evaluate(args, all_prompts, all_reference, all_generations, all_episodes, lo
         if log_to_wandb and state.is_main_process:
             num_samples = 32
             sample_generations = wandb.Table(
-                columns=["Prompt", "Policy", "Policy Reward", "Reference", "Reference Reward"],
+                columns=["Prompt", "Solution", "Gen Response", "Correct"],
                 rows=[
-                    [prompt, pol[len(prompt) :], pol_reward, ref[len(prompt) :], ref_reward]
-                    for prompt, pol, pol_reward, ref, ref_reward in zip(
+                    [prompt, solution, query_response[len(prompt) :], correct]
+                    for prompt, solution, query_response, correct in zip(
                         prompts[:num_samples],
-                        all_query_response[:num_samples],
-                        # gen_rewards[:num_samples],
                         all_reference[:num_samples],
-                        # ref_rewards[:num_samples],
+                        all_query_response[:num_samples],
+                        results[:num_samples],
                     )
                 ],
             )
