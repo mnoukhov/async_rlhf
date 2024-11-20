@@ -2,7 +2,7 @@
 save_generations: True
 dataset_name: openai/gsm8k
 split: test
-max_new_tokens: 400
-temperature: 0.35
+max_new_tokens: 512
+temperature: 0
 top_p: 0.95
 torch_dtype: bfloat16
