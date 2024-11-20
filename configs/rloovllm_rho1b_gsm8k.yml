@@ -12,10 +12,10 @@ vllm: True
 vllm_device: cuda:0
 vllm_gpu_memory_utilization: 0.3
 ## ppo stuff
-rloo_k: 8
+rloo_k: 4
 temperature: 0.6
 # top_p: 0.9
-# kl_coef: 1e-4
+kl_coef: 1e-4
 total_episodes: 131072
 response_length: 512
 num_ppo_epochs: 1
