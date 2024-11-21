@@ -13,7 +13,8 @@ from transformers import (
 from trl import ModelConfig
 
 from src.gsm8k_utils import GSM8k_PROMPT, MathRewardModel, extract_answer
-from src.ppov2_trainer import ElasticPPOv2Config, PPOv2Trainer
+from src.ppo_single_vllm_trainer import PPOSingleVLLMTrainer, PPOVLLMConfig
+from src.ppov2_trainer import PPOv2Trainer
 from src.utils import TRLParser, WandbLogModelConfig
 
 
@@ -26,6 +27,7 @@ class ScriptArguments:
     dataset_test_split: str = field(default="test", metadata={"help": "the name of the training set of the dataset"})
     config: str = field(default=None, metadata={"help": "Path to the optional config file"})
     wandb_run_id: Optional[str] = field(default=None)
+    vllm: bool = False
 
 
 def prepare_dataset(dataset, tokenizer):
@@ -54,12 +56,8 @@ def prepare_dataset(dataset, tokenizer):
 
 
 if __name__ == "__main__":
-    parser = TRLParser((ScriptArguments, ElasticPPOv2Config, ModelConfig))
+    parser = TRLParser((ScriptArguments, PPOVLLMConfig, ModelConfig))
     args, config, model_config = parser.parse_args_and_config()
-
-    if args.output_global_parent_dir is not None:
-        run_id = os.path.basename(os.getcwd())
-        config.output_dir = os.path.join(args.output_global_parent_dir, run_id, config.output_dir)
 
     if args.wandb_run_id == "slurm":
         run_id = os.environ["SLURM_JOB_ID"]
@@ -88,26 +86,24 @@ if __name__ == "__main__":
         config.sft_model_path,
         num_labels=1,
         torch_dtype=torch_dtype,
-        # attn_implementation="flash_attention_2",
+        attn_implementation="flash_attention_2",
     )
     reward_model = MathRewardModel(tokenizer=tokenizer)
     ref_policy = AutoModelForCausalLM.from_pretrained(
         config.sft_model_path,
         torch_dtype=torch_dtype,
-        # attn_implementation="flash_attention_2",
+        attn_implementation="flash_attention_2",
     )
     policy = AutoModelForCausalLM.from_pretrained(
         config.sft_model_path,
         torch_dtype=torch_dtype,
-        # attn_implementation="flash_attention_2",
+        attn_implementation="flash_attention_2",
     )
     ################
     # Dataset
     ################
     raw_datasets = load_dataset(args.dataset_name, data_dir=args.dataset_subset)
     if config.sanity_check:
-        for key in raw_datasets:
-            raw_datasets[key] = raw_datasets[key].select(range(1024))
         config.push_to_hub = False
         config.report_to = ""
         config.save_strategy = "no"
@@ -127,8 +123,12 @@ if __name__ == "__main__":
     ################
     # Training
     ################
+    if args.vllm:
+        TrainerCls = PPOSingleVLLMTrainer
+    else:
+        TrainerCls = PPOv2Trainer
 
-    trainer = PPOv2Trainer(
+    trainer = TrainerCls(
         config=config,
         tokenizer=tokenizer,
         policy=policy,
@@ -145,7 +145,6 @@ if __name__ == "__main__":
         trainer.save_model(config.output_dir)
         if config.push_to_hub:
             trainer.push_to_hub()
-        trainer.generate_completions()
 
         if trainer.accelerator.is_main_process:
             try:

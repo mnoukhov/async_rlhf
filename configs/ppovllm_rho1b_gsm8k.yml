@@ -1,0 +1,39 @@
+wandb_run_id: slurm
+output_global_parent_dir: results
+output_dir: ppo_rho1b_gsm8k
+run_name: ppo_rho1b_gsm8k
+dataset_name: openai/gsm8k
+dataset_test_split: test
+# max_length: 512
+bf16: True
+torch_dtype: bfloat16
+## vllm
+vllm: True
+vllm_device: cuda:0
+vllm_gpu_memory_utilization: 0.3
+## ppo stuff
+rloo_k: 8
+temperature: 0.6
+# top_p: 0.9
+kl_coef: 1e-4
+total_episodes: 131072
+response_length: 512
+num_ppo_epochs: 1
+num_mini_batches: 1
+learning_rate: 1.0e-6
+per_device_train_batch_size: 8
+gradient_accumulation_steps: 8
+model_name_or_path: realtreetune/rho-1b-sft-GSM8K
+sft_model_path: realtreetune/rho-1b-sft-GSM8K
+local_rollout_forward_batch_size: 32
+non_eos_penalty: True
+stop_token: eos
+# evaluation_strategy: "steps"
+# eval_steps: 0.2
+## save strategy
+save_strategy: steps
+save_steps: 0.25
+hub_strategy: all_checkpoints
+logging_steps: 100
+# num_sample_generations: 5
+num_sample_generations: 0

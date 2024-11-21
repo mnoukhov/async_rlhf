@@ -11,7 +11,7 @@ from trl import ModelConfig
 from src.gsm8k_utils import GSM8k_PROMPT, MathRewardModel, extract_answer
 from src.rloo_trainer import MyRLOOConfig as RLOOConfig
 from src.rloo_trainer import MyRLOOTrainer as RLOOTrainer
-from src.rloo_trainer_single_vllm import RLOOSingleVLLMTrainer, RLOOVLLMConfig
+from src.rloo_single_vllm_trainer import RLOOSingleVLLMTrainer, RLOOVLLMConfig
 from src.utils import TRLParser, WandbLogModelConfig
 
 

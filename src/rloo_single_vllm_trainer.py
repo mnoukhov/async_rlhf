@@ -270,7 +270,6 @@ class RLOOSingleVLLMTrainer(Trainer):
             top_p=args.top_p,
             max_tokens=args.response_length,
             include_stop_str_in_output=True,
-            # logprobs=1,
         )
 
         if accelerator.is_main_process:
