@@ -164,9 +164,9 @@ if __name__ == "__main__":
     else:
         from vllm.model_executor.parallel_utils.parallel_state import destroy_model_parallel
 
-    if args.sanity_check:
-        checkpoint_subfolders = [path for path in os.listdir(args.model_name_or_path) if path.startswith("checkpoint")]
-        args.model_paths = checkpoint_subfolders[:2]
+    # if args.sanity_check:
+    #     checkpoint_subfolders = [path for path in os.listdir(args.model_name_or_path) if path.startswith("checkpoint")]
+    #     args.model_paths = checkpoint_subfolders[:2]
 
     print("GENERATING")
     generate(args)

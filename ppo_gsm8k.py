@@ -9,6 +9,7 @@ from transformers import (
     AutoModelForCausalLM,
     AutoModelForSequenceClassification,
     AutoTokenizer,
+    DataCollatorForTokenClassification,
 )
 from trl import ModelConfig
 
@@ -107,11 +108,11 @@ if __name__ == "__main__":
         config.push_to_hub = False
         config.report_to = ""
         config.save_strategy = "no"
-        config.total_episodes = 2048
-        config.per_device_train_batch_size = 2
-        config.gradient_accumulation_steps = 4
-        config.local_rollout_forward_batch_size = 8
-        config.num_sample_generations = 0
+        # config.total_episodes = 2048
+        # config.per_device_train_batch_size = 2
+        # config.gradient_accumulation_steps = 4
+        # config.local_rollout_forward_batch_size = 8
+        # config.num_sample_generations = 0
 
     train_dataset = raw_datasets[args.dataset_train_split]
     eval_dataset = raw_datasets[args.dataset_test_split]
@@ -119,6 +120,9 @@ if __name__ == "__main__":
     train_dataset = prepare_dataset(train_dataset, tokenizer)
     eval_dataset = prepare_dataset(eval_dataset, tokenizer)
     assert train_dataset[0]["input_ids"][-1] != tokenizer.eos_token_id, "The last token should not be an EOS token"
+
+    space_padding_id = tokenizer.encode(" ", add_special_tokens=False)[0]
+    data_collator = DataCollatorForTokenClassification(tokenizer, label_pad_token_id=space_padding_id)
 
     ################
     # Training
@@ -136,8 +140,9 @@ if __name__ == "__main__":
         reward_model=reward_model,
         value_model=value_model,
         train_dataset=train_dataset,
-        eval_dataset=eval_dataset,
+        # eval_dataset=eval_dataset,
         callbacks=[WandbLogModelConfig(model_config)],
+        data_collator=data_collator,
     )
     trainer.train()
 

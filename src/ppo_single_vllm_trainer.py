@@ -107,7 +107,7 @@ class PPOSingleVLLMTrainer(Trainer):
         self.train_dataset = train_dataset
         self.train_dataset_len = len(train_dataset)
         self.value_model = value_model
-        self.data_collator = data_collator
+        self.data_collator = data_collator if data_collator is not None else DataCollatorWithPadding(tokenizer)
         self.eval_dataset = eval_dataset
         self.optimizer, self.lr_scheduler = optimizers
 
@@ -141,7 +141,7 @@ class PPOSingleVLLMTrainer(Trainer):
             args.batch_size,
             f" total_episodes {args.total_episodes} should be divisible by batch_size {args.batch_size} ",
         )
-        args.num_updates = self.num_batches * args.num_mini_batches
+        args.num_updates = self.num_batches * args.num_mini_batches * args.num_ppo_epochs
         # time_tensor = torch.tensor(int(time.time()), device=accelerator.device)
         # time_int = broadcast(time_tensor, 0).item()  # avoid different timestamps across processes
         # args.run_name = f"{args.exp_name}__{args.seed}__{time_int}"
@@ -193,7 +193,7 @@ class PPOSingleVLLMTrainer(Trainer):
             self.train_dataset,
             batch_size=exact_div(args.local_batch_size, args.rloo_k),
             shuffle=True,
-            collate_fn=DataCollatorWithPadding(tokenizer),
+            collate_fn=self.data_collator,
             drop_last=True,  # needed; otherwise the last batch will be of ragged shape
         )
         # sync random states for DataLoader(shuffle=True) before `accelerator.prepare`
@@ -205,7 +205,7 @@ class PPOSingleVLLMTrainer(Trainer):
         self.eval_dataloader = DataLoader(
             self.eval_dataset,
             batch_size=args.per_device_eval_batch_size,
-            collate_fn=DataCollatorWithPadding(self.tokenizer),
+            collate_fn=self.data_collator,
             drop_last=True,
         )  # no need to shuffle eval dataset
         self.eval_dataloader = accelerator.prepare(self.eval_dataloader)
@@ -376,7 +376,7 @@ class PPOSingleVLLMTrainer(Trainer):
                     query_response = query_responses[i : i + args.local_rollout_forward_batch_size]
 
                     if labels is not None:
-                        labels = labels[i : i + args.local_rollout_forward_batch_size]
+                        label = labels[i : i + args.local_rollout_forward_batch_size]
 
                     response = query_response[:, context_length:]
 
@@ -420,7 +420,7 @@ class PPOSingleVLLMTrainer(Trainer):
                     value = full_value[:, context_length - 1 : -1].squeeze(-1)
 
                     if labels is not None:
-                        score = reward_model(postprocessed_response, labels)
+                        score = reward_model(postprocessed_response, label)
                     else:
                         _, score, _ = get_reward(
                             reward_model,
@@ -611,6 +611,7 @@ class PPOSingleVLLMTrainer(Trainer):
                         mb_advantage, mb_values, mb_responses, mb_query_responses, mb_logprobs,
                     )
                     # fmt: on
+                    gc.collect()
                     torch.cuda.empty_cache()
             with torch.no_grad():
                 mean_kl = kl.sum(1).mean()

@@ -26,7 +26,7 @@ gradient_accumulation_steps: 8
 model_name_or_path: realtreetune/rho-1b-sft-GSM8K
 sft_model_path: realtreetune/rho-1b-sft-GSM8K
 local_rollout_forward_batch_size: 32
-non_eos_penalty: True
+non_eos_penalty: False
 stop_token: eos
 # evaluation_strategy: "steps"
 # eval_steps: 0.2

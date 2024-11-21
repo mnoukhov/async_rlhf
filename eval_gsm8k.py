@@ -153,8 +153,8 @@ if __name__ == "__main__":
 
     if args.sanity_check:
         args.wandb_run_id = None
-        first_ckpt = next(iter(generations.keys()))
-        generations = {first_ckpt: generations[first_ckpt]}
+        # first_ckpt = next(iter(generations.keys()))
+        # generations = {first_ckpt: generations[first_ckpt]}
         # generations[first_ckpt].dataset = generations[first_ckpt].dataset.select(range(100))
         # reference.dataset = reference.dataset.select(range(100))
 

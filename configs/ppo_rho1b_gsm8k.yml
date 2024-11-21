@@ -7,17 +7,19 @@ dataset_test_split: test
 bf16: True
 torch_dtype: bfloat16
 ## ppo stuff
+temperature: 0.6
+kl_coef: 1e-4
 num_ppo_epochs: 1
 total_episodes: 131072
-response_length: 53
-num_ppo_epochs: 1
+response_length: 400
+num_ppo_epochs: 2
 num_mini_batches: 1
-learning_rate: 3.0e-6
+learning_rate: 1.0e-6
 per_device_train_batch_size: 1
-gradient_accumulation_steps: 16
+gradient_accumulation_steps: 64
 model_name_or_path: realtreetune/rho-1b-sft-GSM8K
 sft_model_path: realtreetune/rho-1b-sft-GSM8K
-local_rollout_forward_batch_size: 4
+local_rollout_forward_batch_size: 16
 non_eos_penalty: True
 stop_token: eos
 # evaluation_strategy: "steps"

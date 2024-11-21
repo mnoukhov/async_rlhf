@@ -9,9 +9,8 @@ from transformers import AutoModelForCausalLM, AutoTokenizer, DataCollatorForTok
 from trl import ModelConfig
 
 from src.gsm8k_utils import GSM8k_PROMPT, MathRewardModel, extract_answer
-from src.rloo_trainer import MyRLOOConfig as RLOOConfig
-from src.rloo_trainer import MyRLOOTrainer as RLOOTrainer
 from src.rloo_single_vllm_trainer import RLOOSingleVLLMTrainer, RLOOVLLMConfig
+from src.rloo_trainer import MyRLOOTrainer as RLOOTrainer
 from src.utils import TRLParser, WandbLogModelConfig
 
 
@@ -96,11 +95,11 @@ if __name__ == "__main__":
     raw_datasets = load_dataset(args.dataset_name, data_dir=args.dataset_subset)
     if config.sanity_check:
         for key in raw_datasets:
-            raw_datasets[key] = raw_datasets[key].select(range(1024))
+            raw_datasets[key] = raw_datasets[key].select(range(16))
         config.push_to_hub = False
         config.report_to = ""
         config.save_strategy = "no"
-        # config.total_episodes = 2048
+        config.total_episodes = 2048
         # config.per_device_train_batch_size = 4
         # config.gradient_accumulation_steps = 4
         # config.local_rollout_forward_batch_size = 8
