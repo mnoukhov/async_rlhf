@@ -95,7 +95,7 @@ class OnlineDPOSingleVLLMTrainer(RLOOTrainer):
         self.reward_model = reward_model
         self.train_dataset = train_dataset
         self.train_dataset_len = len(train_dataset)
-        self.data_collator = data_collator
+        self.data_collator = data_collator if data_collator is not None else DataCollatorWithPadding(tokenizer)
         self.eval_dataset = eval_dataset
         self.optimizer, self.lr_scheduler = optimizers
 
@@ -204,7 +204,7 @@ class OnlineDPOSingleVLLMTrainer(RLOOTrainer):
             self.train_dataset,
             batch_size=self.local_dataloader_batch_size,
             shuffle=True,
-            collate_fn=DataCollatorWithPadding(tokenizer),
+            collate_fn=self.data_collator,
             drop_last=True,  # needed; otherwise the last batch will be of ragged shape
         )
         # sync random states for DataLoader(shuffle=True) before `accelerator.prepare`
@@ -314,12 +314,16 @@ class OnlineDPOSingleVLLMTrainer(RLOOTrainer):
 
         if self.args.sync:
             next_queries = None
+            next_labels = None
         else:
             # send first batch of data to actor
             data = next(iter_dataloader)
             next_queries = data["input_ids"].to(device)
             next_queries = next_queries.repeat(args.rloo_k, 1)
             next_g_queries_list = gather_object(next_queries.tolist())
+            next_labels = data.get("labels", None)
+            if next_labels is not None:
+                next_labels = next_labels.repeat(args.rloo_k, 1)
             if accelerator.is_main_process:
                 next_g_queries_list = [
                     [inneritem for inneritem in item if inneritem != tokenizer.pad_token_id]
@@ -347,10 +351,16 @@ class OnlineDPOSingleVLLMTrainer(RLOOTrainer):
                 ]
                 g_padded_response_ids = torch.tensor(g_padded_response_ids, device=device)
                 vllm_responses[:] = g_padded_response_ids
+
+                labels = next_labels
+
             batch_start_time = time.time()
             with torch.no_grad():
                 next_queries = data["input_ids"].to(device)
                 next_queries = next_queries.repeat(args.rloo_k, 1)
+                next_labels = data.get("labels", None)
+                if next_labels is not None:
+                    next_labels = next_labels.repeat(args.rloo_k, 1)
 
                 # with unwrap_model_for_generation(model, self.accelerator) as unwrapped_model:
                 next_g_queries_list = gather_object(next_queries.tolist())
@@ -379,6 +389,8 @@ class OnlineDPOSingleVLLMTrainer(RLOOTrainer):
                         ]
                         g_padded_response_ids = torch.tensor(g_padded_response_ids, device=device)
                         vllm_responses[:] = g_padded_response_ids
+
+                        labels = next_labels
                         batch_start_time = time.time()
 
                 local_vllm_responses = vllm_responses[
@@ -421,6 +433,8 @@ class OnlineDPOSingleVLLMTrainer(RLOOTrainer):
                     query = queries[i : i + reward_forward_batch_size]
                     query_response = query_responses[i : i + reward_forward_batch_size]
                     response = query_response[:, context_length:]
+
+                    label = labels[i : i + reward_forward_batch_size] if labels is not None else None
                     # Response Processing 1. truncate response after the first occurrence of `stop_token_id`
                     postprocessed_response = response
                     if args.stop_token_id is not None:  # handle the edge case when stop_token_id exists but is 0
@@ -432,9 +446,12 @@ class OnlineDPOSingleVLLMTrainer(RLOOTrainer):
                     postprocessed_query_response = torch.cat((query, postprocessed_response), 1)
                     sequence_length = first_true_indices(postprocessed_response == tokenizer.pad_token_id) - 1
                     # reward_start_time = time.time()
-                    _, score, _ = get_reward(
-                        reward_model, postprocessed_query_response, tokenizer.pad_token_id, context_length
-                    )
+                    if label is not None:
+                        score = reward_model(postprocessed_response, label)
+                    else:
+                        _, score, _ = get_reward(
+                            reward_model, postprocessed_query_response, tokenizer.pad_token_id, context_length
+                        )
                     # print(f"reward time is {time.time() - reward_start_time}")
 
                     responses.append(response)
