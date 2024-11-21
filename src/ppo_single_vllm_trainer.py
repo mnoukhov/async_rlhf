@@ -361,7 +361,6 @@ class PPOSingleVLLMTrainer(Trainer):
                 ]
                 g_padded_response_ids = torch.tensor(g_padded_response_ids, device=device)
                 query_responses = torch.cat((queries, g_padded_response_ids), 1)
-                # TODO
 
             with torch.no_grad():
                 context_length = queries.shape[1]
@@ -813,10 +812,6 @@ class PPOSingleVLLMTrainer(Trainer):
                                 tokenizer.pad_token_id,
                                 context_length,
                             )
-
-                        import pdb
-
-                        pdb.set_trace()
 
                         query_responses.append(query_response)
                         responses.append(response)
