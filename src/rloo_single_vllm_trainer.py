@@ -26,6 +26,7 @@ from transformers import (
 from transformers.integrations import get_reporting_integration_callbacks
 from transformers.trainer import DEFAULT_CALLBACKS, DEFAULT_PROGRESS_CALLBACK
 from transformers.trainer_callback import CallbackHandler, PrinterCallback
+from trl.core import masked_whiten
 from trl.models.utils import unwrap_model_for_generation
 from trl.trainer.rloo_trainer import INVALID_LOGPROB
 from trl.trainer.utils import (
@@ -50,6 +51,8 @@ class RLOOVLLMConfig(MyRLOOConfig):
     vllm_device: str = None
     "default will put it on accelerate.num_processes + 1"
     vllm_gpu_memory_utilization: float = 0.9
+    rescale_reward: float = 1.0
+    beta: float = 0.0
 
 
 class RLOOSingleVLLMTrainer(Trainer):
@@ -237,10 +240,12 @@ class RLOOSingleVLLMTrainer(Trainer):
         start_time = time.time()
         stats_shape = (args.num_ppo_epochs, args.num_mini_batches, args.gradient_accumulation_steps)
         pg_loss_stats = torch.zeros(stats_shape, device=device)
+        kl_loss_stats = torch.zeros(stats_shape, device=device)
         entropy_stats = torch.zeros(stats_shape, device=device)
         approxkl_stats = torch.zeros(stats_shape, device=device)
         ratio_stats = torch.zeros(stats_shape, device=device)
         pg_clipfrac_stats = torch.zeros(stats_shape, device=device)
+        grad_norm_stats = torch.zeros((args.num_ppo_epochs, args.num_mini_batches), device=device)
 
         model.train()
         self.state.max_steps = args.num_updates
@@ -483,6 +488,8 @@ class RLOOSingleVLLMTrainer(Trainer):
                     scores = torch.where(contain_eos_token, scores, torch.full_like(scores, args.penalty_reward_value))
                 # accelerator.print(f"{scores=}, {(contain_eos_token.sum() / len(contain_eos_token))=}")
 
+                pass_at_one = (scores.reshape(args.rloo_k, -1)[0] == 1.0).float().mean()
+                scores = scores * args.rescale_reward
                 # be very careful with `padding_mask_p1`; see https://excalidraw.com/#json=LWnzG4w2k5DjF_EOL_xPt,e2w3a-hFJ_gX5vOfeyXGTw
                 response_idxs = torch.arange(responses.shape[1], device=responses.device).repeat(responses.shape[0], 1)
                 padding_mask = response_idxs > sequence_lengths.unsqueeze(1)
@@ -494,12 +501,17 @@ class RLOOSingleVLLMTrainer(Trainer):
                 non_score_reward = (-args.kl_coef * kl).sum(1)
                 rlhf_reward = scores + non_score_reward
 
+                # 5. whiten rewards
+                # if args.whiten_rewards:
+                #     padding_mask_p1 = response_idxs > ((sequence_lengths + 1).unsqueeze(1))
+                #     rlhf_reward = masked_whiten(rlhf_reward, mask=~padding_mask_p1, shift_mean=False)
+                #     rlhf_reward = torch.masked_fill(rlhf_reward, padding_mask_p1, 0)
+
                 # vectorized RLOO advantages implementation
                 rlhf_reward = rlhf_reward.reshape(args.rloo_k, -1)
                 baseline = (rlhf_reward.sum(0) - rlhf_reward) / (args.rloo_k - 1)
                 advantages = rlhf_reward - baseline
                 advantages = advantages.flatten()
-                torch.cuda.empty_cache()
 
             # Do multiple epochs of PPO training, with a fresh random shuffle in each epoch
             for ppo_epoch_idx in range(args.num_ppo_epochs):
@@ -517,6 +529,7 @@ class RLOOSingleVLLMTrainer(Trainer):
                             mb_responses = responses[micro_batch_inds]
                             mb_query_responses = query_responses[micro_batch_inds]
                             mb_logprobs = logprobs[micro_batch_inds]
+                            mb_ref_logprobs = ref_logprobs[micro_batch_inds]
 
                             output = forward(model, mb_query_responses, tokenizer.pad_token_id)
                             logits = output.logits[:, context_length - 1 : -1]
@@ -526,6 +539,12 @@ class RLOOSingleVLLMTrainer(Trainer):
                             new_logprobs = torch.masked_fill(
                                 new_logprobs, padding_mask[micro_batch_inds], INVALID_LOGPROB
                             )
+
+                            # approx kl loss
+                            kl_log_ratio = mb_ref_logprobs - new_logprobs
+                            kl_loss_approx = torch.exp(kl_log_ratio) - kl_log_ratio - 1
+                            kl_loss = -args.beta * kl_loss_approx.sum(1).mean()
+
                             new_ratio = (new_logprobs - mb_logprobs).exp()
                             new_logprobs = new_logprobs.sum(1)
                             mb_logprobs = mb_logprobs.sum(1)
@@ -535,8 +554,19 @@ class RLOOSingleVLLMTrainer(Trainer):
                             pg_losses2 = -mb_advantage * torch.clamp(ratio, 1.0 - args.cliprange, 1.0 + args.cliprange)
                             pg_loss_max = torch.max(pg_losses, pg_losses2)
                             pg_loss = pg_loss_max.mean()
-                            loss = pg_loss
+
+                            loss = pg_loss + kl_loss
                             accelerator.backward(loss)
+                            if (
+                                accelerator.sync_gradients
+                                and args.max_grad_norm is not None
+                                and args.max_grad_norm > 0
+                            ):
+                                grad_norm = self.accelerator.clip_grad_norm_(
+                                    model.parameters(),
+                                    args.max_grad_norm,
+                                )
+                                grad_norm_stats[ppo_epoch_idx, minibatch_idx] = grad_norm.item()
                             optimizer.step()
                             optimizer.zero_grad()
                             with torch.no_grad():
@@ -549,6 +579,7 @@ class RLOOSingleVLLMTrainer(Trainer):
                                     pg_clipfrac
                                 )
                                 pg_loss_stats[ppo_epoch_idx, minibatch_idx, gradient_accumulation_idx] = pg_loss
+                                kl_loss_stats[ppo_epoch_idx, minibatch_idx, gradient_accumulation_idx] = kl_loss
                                 entropy_stats[ppo_epoch_idx, minibatch_idx, gradient_accumulation_idx] = entropy.mean()
                                 ratio_stats[ppo_epoch_idx, minibatch_idx, gradient_accumulation_idx] = new_ratio.mean()
                         gradient_accumulation_idx += 1
@@ -574,6 +605,7 @@ class RLOOSingleVLLMTrainer(Trainer):
                 eps = int(self.state.episode / (time.time() - start_time))
                 metrics = {}
                 metrics["eps"] = eps
+                metrics["objective/pass1"] = self.accelerator.gather(pass_at_one).mean().item()
                 metrics["objective/kl"] = self.accelerator.gather(mean_kl).mean().item()
                 metrics["objective/entropy"] = self.accelerator.gather(mean_entropy).mean().item()
                 metrics["objective/non_score_reward"] = self.accelerator.gather(mean_non_score_reward).mean().item()
@@ -582,7 +614,9 @@ class RLOOSingleVLLMTrainer(Trainer):
                 metrics["policy/approxkl_avg"] = self.accelerator.gather(approxkl_stats).mean().item()
                 metrics["policy/clipfrac_avg"] = self.accelerator.gather(pg_clipfrac_stats).mean().item()
                 metrics["loss/policy_avg"] = self.accelerator.gather(pg_loss_stats).mean().item()
+                metrics["loss/kl_avg"] = self.accelerator.gather(kl_loss_stats).mean().item()
                 metrics["policy/entropy_avg"] = self.accelerator.gather(entropy_stats).mean().item()
+                metrics["policy/grad_norm"] = self.accelerator.gather(grad_norm_stats).mean().item()
                 metrics["val/ratio"] = self.accelerator.gather(ratio_stats).mean().item()
                 metrics["val/ratio_var"] = self.accelerator.gather(ratio_stats).var().item()
                 metrics["val/num_eos_tokens"] = (responses == tokenizer.eos_token_id).sum().item()
