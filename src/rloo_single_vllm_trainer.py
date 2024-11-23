@@ -128,11 +128,14 @@ class RLOOSingleVLLMTrainer(Trainer):
         if args.num_sample_generations > 0:
             self.sample_generations_freq = max(1, self.num_batches // args.num_sample_generations)
 
-        self.local_dataloader_batch_size = exact_div(
-            args.local_batch_size,
-            args.rloo_k,
-            "`local_batch_size` must be a multiple of rloo_k",
-        )  # RLOO logic: needed because RLOO repeats the same prompt args.rloo_k times
+        if not args.train_single:
+            self.local_dataloader_batch_size = exact_div(
+                args.local_batch_size,
+                args.rloo_k,
+                "`local_batch_size` must be a multiple of rloo_k",
+            )  # RLOO logic: needed because RLOO repeats the same prompt args.rloo_k times
+        else:
+            self.local_dataloader_batch_size = args.local_batch_size
 
         #########
         # setup model, optimizer, and others
@@ -514,6 +517,17 @@ class RLOOSingleVLLMTrainer(Trainer):
                 baseline = (rlhf_reward.sum(0) - rlhf_reward) / (args.rloo_k - 1)
                 advantages = rlhf_reward - baseline
                 advantages = advantages.flatten()
+
+                if args.train_single:
+                    num_examples = rlhf_reward.shape[1]
+                    best_reward, best_local_index = torch.max(rlhf_reward, dim=1)
+                    best_indices = best_local_indices * num_examples + torch.arange(num_examples, device=rlhf_reward.device)
+                    advantages = advantages[best_indices]
+                    responses = responses[best_indices]
+                    query_responses = query_responses[best_indices]
+                    logprobs = logprobs[best_indices]
+                    ref_logprobs = ref_logprobs[best_indices]
+                    padding_mask = padding_mask[best_indices]
 
             # Do multiple epochs of PPO training, with a fresh random shuffle in each epoch
             for ppo_epoch_idx in range(args.num_ppo_epochs):
