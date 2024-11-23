@@ -53,6 +53,7 @@ class RLOOVLLMConfig(MyRLOOConfig):
     vllm_gpu_memory_utilization: float = 0.9
     rescale_reward: float = 1.0
     beta: float = 0.0
+    train_single: bool = False
 
 
 class RLOOSingleVLLMTrainer(Trainer):
@@ -126,6 +127,7 @@ class RLOOSingleVLLMTrainer(Trainer):
         self.local_seed = args.seed + accelerator.process_index * 100003  # Prime
         if args.num_sample_generations > 0:
             self.sample_generations_freq = max(1, self.num_batches // args.num_sample_generations)
+
         self.local_dataloader_batch_size = exact_div(
             args.local_batch_size,
             args.rloo_k,
@@ -543,7 +545,7 @@ class RLOOSingleVLLMTrainer(Trainer):
                             # approx kl loss
                             kl_log_ratio = mb_ref_logprobs - new_logprobs
                             kl_loss_approx = torch.exp(kl_log_ratio) - kl_log_ratio - 1
-                            kl_loss = -args.beta * kl_loss_approx.sum(1).mean()
+                            kl_loss = args.beta * kl_loss_approx.sum(1).mean()
 
                             new_ratio = (new_logprobs - mb_logprobs).exp()
                             new_logprobs = new_logprobs.sum(1)
