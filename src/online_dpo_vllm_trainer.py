@@ -318,11 +318,16 @@ class OnlineDPOVLLMTrainer(RLOOTrainer):
 
         if self.args.sync:
             next_queries = None
+            next_labels = None
         else:
             # send first batch of data to actor
             data = next(iter_dataloader)
             next_queries = data["input_ids"].to(device)
             next_queries = next_queries.repeat(args.rloo_k, 1)
+            next_labels = data.get("labels", None)
+            if next_labels is not None:
+                next_labels = next_labels.repeat(args.rloo_k, 1)
+
             g_queries_list = gather_object(next_queries.tolist())
             if accelerator.is_main_process:
                 g_queries_list = [
@@ -333,6 +338,7 @@ class OnlineDPOVLLMTrainer(RLOOTrainer):
         self.control = self.callback_handler.on_train_begin(args, self.state, self.control)
         for batch_num in range(1, self.num_batches + 1):
             queries = next_queries
+            labels = next_labels
             self.state.episode += 1 * args.batch_size
             self.lr_scheduler.step()
             data = next(iter_dataloader)
@@ -344,9 +350,13 @@ class OnlineDPOVLLMTrainer(RLOOTrainer):
             with torch.no_grad():
                 next_queries = data["input_ids"].to(device)
                 next_queries = next_queries.repeat(args.rloo_k, 1)
+                next_labels = data.get("labels", None)
+                if next_labels is not None:
+                    next_labels = next_labels.repeat(args.rloo_k, 1)
 
                 if self.args.sync:
                     queries = next_queries
+                    labels = next_labels
 
                 # with unwrap_model_for_generation(model, self.accelerator) as unwrapped_model:
                 g_queries_list = gather_object(next_queries.tolist())
@@ -389,6 +399,8 @@ class OnlineDPOVLLMTrainer(RLOOTrainer):
                 ref_and_reward_start = time.time()
                 for i in range(0, queries.shape[0], args.local_rollout_forward_batch_size):
                     query = queries[i : i + args.local_rollout_forward_batch_size]
+                    if labels is not None:
+                        label = labels[i : i + args.local_rollout_forward_batch_size] if labels is not None else None
                     query_response = query_responses[i : i + args.local_rollout_forward_batch_size]
                     response = query_response[:, context_length:]
 
@@ -402,9 +414,12 @@ class OnlineDPOVLLMTrainer(RLOOTrainer):
                     # Response Processing 2. run reward model on the truncated responses
                     postprocessed_query_response = torch.cat((query, postprocessed_response), 1)
                     sequence_length = first_true_indices(postprocessed_response == tokenizer.pad_token_id) - 1
-                    _, score, _ = get_reward(
-                        reward_model, postprocessed_query_response, tokenizer.pad_token_id, context_length
-                    )
+                    if label is not None:
+                        score = reward_model(postprocessed_response, label)
+                    else:
+                        _, score, _ = get_reward(
+                            reward_model, postprocessed_query_response, tokenizer.pad_token_id, context_length
+                        )
                     del postprocessed_query_response
 
                     responses.append(response)

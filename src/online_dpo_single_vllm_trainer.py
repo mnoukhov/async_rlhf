@@ -57,6 +57,7 @@ class OnlineDPOVLLMConfig(OnlineDPOConfig):
     vllm_device: str = None
     "default will put it on accelerate.num_processes + 1"
     vllm_gpu_memory_utilization: float = 0.9
+    top_p: float = 1.0
 
 
 class OnlineDPOSingleVLLMTrainer(RLOOTrainer):
@@ -260,6 +261,7 @@ class OnlineDPOSingleVLLMTrainer(RLOOTrainer):
         start_time = time.time()
         stats_shape = (args.num_ppo_epochs, args.num_mini_batches, args.gradient_accumulation_steps)
         loss_stats = torch.zeros(stats_shape, device=device)
+        grad_norm_stats = torch.zeros((args.num_ppo_epochs, args.num_mini_batches), device=device)
 
         model.train()
         self.state.max_steps = args.num_updates
@@ -288,7 +290,7 @@ class OnlineDPOSingleVLLMTrainer(RLOOTrainer):
 
         sampling_params = SamplingParams(
             temperature=(args.temperature + 1e-7),
-            top_p=1.0,
+            top_p=args.top_p,
             max_tokens=args.response_length,
             include_stop_str_in_output=True,
         )
@@ -626,6 +628,16 @@ class OnlineDPOSingleVLLMTrainer(RLOOTrainer):
 
                             loss = losses.mean()
                             accelerator.backward(loss)
+                            if (
+                                accelerator.sync_gradients
+                                and args.max_grad_norm is not None
+                                and args.max_grad_norm > 0
+                            ):
+                                grad_norm = self.accelerator.clip_grad_norm_(
+                                    model.parameters(),
+                                    args.max_grad_norm,
+                                )
+                                grad_norm_stats[ppo_epoch_idx, minibatch_idx] = grad_norm.item()
                             optimizer.step()
                             optimizer.zero_grad()
 
@@ -714,6 +726,7 @@ class OnlineDPOSingleVLLMTrainer(RLOOTrainer):
                 metrics["logps/rejected"] = rejected_logprobs.mean().item()
                 metrics["logps/chosen"] = chosen_logprobs.mean().item()
                 metrics["loss/policy_avg"] = self.accelerator.gather(loss_stats).mean().item()
+                metrics["loss/grad_norm"] = self.accelerator.gather(grad_norm_stats).mean().item()
                 # metrics["logits/rejected"] = policy_rejected_logits.detach().mean().cpu()
                 # metrics["logits/chosen"] = policy_chosen_logits.detach().mean().cpu()
                 metrics["val/num_eos_tokens"] = (responses == tokenizer.eos_token_id).sum().item()
