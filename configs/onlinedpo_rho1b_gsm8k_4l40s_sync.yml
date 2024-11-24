@@ -20,16 +20,16 @@ beta: 0.1
 max_grad_norm: 1.0
 # top_p: 0.9
 # kl_coef: 1e-4
-total_episodes: 135168
+total_episodes: 129024
 response_length: 512
 num_ppo_epochs: 1
 num_mini_batches: 1
 learning_rate: 3.0e-6
-per_device_train_batch_size: 11
-gradient_accumulation_steps: 8
+per_device_train_batch_size: 6
+gradient_accumulation_steps: 14
 model_name_or_path: realtreetune/rho-1b-sft-GSM8K
 sft_model_path: realtreetune/rho-1b-sft-GSM8K
-local_rollout_forward_batch_size: 88
+local_rollout_forward_batch_size: 84
 non_eos_penalty: False
 stop_token: eos
 # evaluation_strategy: "steps"
