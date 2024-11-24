@@ -54,6 +54,7 @@ class RLOOVLLMConfig(MyRLOOConfig):
     rescale_reward: float = 1.0
     beta: float = 0.0
     train_single: bool = False
+    grpo: bool = False
 
 
 class RLOOSingleVLLMTrainer(Trainer):
@@ -134,8 +135,10 @@ class RLOOSingleVLLMTrainer(Trainer):
                 args.rloo_k,
                 "`local_batch_size` must be a multiple of rloo_k",
             )  # RLOO logic: needed because RLOO repeats the same prompt args.rloo_k times
+            self.all_generated_batch_size = args.batch_size
         else:
             self.local_dataloader_batch_size = args.local_batch_size
+            self.all_generated_batch_size = args.batch_size * args.rloo_k
 
         #########
         # setup model, optimizer, and others
@@ -329,12 +332,12 @@ class RLOOSingleVLLMTrainer(Trainer):
             self.lr_scheduler.step()
             data = next(iter_dataloader)
             vllm_responses = torch.zeros(
-                (args.batch_size, args.response_length),
+                (self.all_generated_batch_size, args.response_length),
                 device=accelerator.device,
                 dtype=torch.long,
             )
             vllm_response_lprobs = torch.zeros(
-                (args.batch_size, args.response_length),
+                (self.all_generated_batch_size, args.response_length),
                 device=accelerator.device,
                 dtype=torch.float,
             )
@@ -516,12 +519,19 @@ class RLOOSingleVLLMTrainer(Trainer):
                 rlhf_reward = rlhf_reward.reshape(args.rloo_k, -1)
                 baseline = (rlhf_reward.sum(0) - rlhf_reward) / (args.rloo_k - 1)
                 advantages = rlhf_reward - baseline
+
+                if args.grpo:
+                    std = rlhf_reward.std(dim=0) + 1e-7
+                    advantages = advantages / std
+
                 advantages = advantages.flatten()
 
                 if args.train_single:
                     num_examples = rlhf_reward.shape[1]
-                    best_reward, best_local_index = torch.max(rlhf_reward, dim=1)
-                    best_indices = best_local_indices * num_examples + torch.arange(num_examples, device=rlhf_reward.device)
+                    best_reward, best_local_indices = torch.max(rlhf_reward, dim=0)
+                    best_indices = best_local_indices * num_examples + torch.arange(
+                        num_examples, device=rlhf_reward.device
+                    )
                     advantages = advantages[best_indices]
                     responses = responses[best_indices]
                     query_responses = query_responses[best_indices]

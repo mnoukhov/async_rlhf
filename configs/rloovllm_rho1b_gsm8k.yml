@@ -13,7 +13,7 @@ vllm: True
 vllm_device: cuda:0
 vllm_gpu_memory_utilization: 0.3
 ## ppo stuff
-rloo_k: 4
+rloo_k: 8
 temperature: 0.7
 # top_p: 0.9
 # kl_coef: 0.05
@@ -22,7 +22,7 @@ total_episodes: 131072
 response_length: 512
 num_ppo_epochs: 1
 num_mini_batches: 1
-learning_rate: 3.0e-6
+learning_rate: 1.5e-6
 per_device_train_batch_size: 8
 gradient_accumulation_steps: 32
 model_name_or_path: realtreetune/rho-1b-sft-GSM8K
