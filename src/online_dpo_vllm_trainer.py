@@ -60,6 +60,7 @@ class OnlineDPOVLLMConfig(OnlineDPOConfig):
     vllm_device: str = None
     "default will put it on accelerate.num_processes + 1"
     vllm_gpu_memory_utilization: float = 0.9
+    top_p: float = 1.0
 
 
 class OnlineDPOVLLMTrainer(RLOOTrainer):
@@ -98,7 +99,7 @@ class OnlineDPOVLLMTrainer(RLOOTrainer):
         self.reward_model = reward_model
         self.train_dataset = train_dataset
         self.train_dataset_len = len(train_dataset)
-        self.data_collator = data_collator
+        self.data_collator = data_collator if data_collator is not None else DataCollatorWithPadding(tokenizer)
         self.eval_dataset = eval_dataset
         self.optimizer, self.lr_scheduler = optimizers
 
@@ -208,7 +209,7 @@ class OnlineDPOVLLMTrainer(RLOOTrainer):
             self.train_dataset,
             batch_size=self.local_dataloader_batch_size,
             shuffle=True,
-            collate_fn=DataCollatorWithPadding(tokenizer),
+            collate_fn=self.data_collator,
             drop_last=True,  # needed; otherwise the last batch will be of ragged shape
         )
         # sync random states for DataLoader(shuffle=True) before `accelerator.prepare`
@@ -220,7 +221,7 @@ class OnlineDPOVLLMTrainer(RLOOTrainer):
         self.eval_dataloader = DataLoader(
             self.eval_dataset,
             batch_size=args.per_device_eval_batch_size,
-            collate_fn=DataCollatorWithPadding(self.tokenizer),
+            collate_fn=self.data_collator,
             drop_last=True,
         )  # no need to shuffle eval dataset
         self.eval_dataloader = accelerator.prepare(self.eval_dataloader)
@@ -312,6 +313,7 @@ class OnlineDPOVLLMTrainer(RLOOTrainer):
                     self.state.logging_steps,
                     args.temperature,
                     args.response_length,
+                    args.top_p,
                 ),
             )
             thread.start()
@@ -772,11 +774,12 @@ def vllm_generate(
     logging_steps: int,
     temperature: float,
     response_length: int,
+    top_p: float,
 ):
     vllm_single_gpu_patch()
     generation_config = SamplingParams(
         temperature=(temperature + 1e-7),
-        top_p=1.0,
+        top_p=top_p,
         max_tokens=response_length,
         include_stop_str_in_output=True,
     )
@@ -790,7 +793,7 @@ def vllm_generate(
         dtype=vllm_dtype,
         gpu_memory_utilization=vllm_gpu_memory_utilization,
     )
-    print(f"🔥🔥🔥 vllm loaded in {vllm_dtype}")
+    print(f"🔥🔥🔥 vllm loaded on {vllm_device} in {vllm_dtype}")
     llmp = llm.llm_engine.model_executor.driver_worker.model_runner.model
     i = 0
     while True:
