@@ -273,6 +273,7 @@ class PPOSingleVLLMTrainer(Trainer):
         vf_clipfrac_stats = torch.zeros(stats_shape, device=device)
         entropy_stats = torch.zeros(stats_shape, device=device)
         ratio_stats = torch.zeros(stats_shape, device=device)
+        grad_norm_stats = torch.zeros((args.num_ppo_epochs, args.num_mini_batches), device=device)
         model.train()
         self.state.max_steps = args.num_updates
         self.state.num_train_epochs = args.total_episodes / self.train_dataset_len
@@ -541,6 +542,16 @@ class PPOSingleVLLMTrainer(Trainer):
                             pg_loss = masked_mean(pg_loss_max, ~padding_mask[micro_batch_inds])
                             loss = pg_loss + args.vf_coef * vf_loss
                             accelerator.backward(loss)
+                            if (
+                                accelerator.sync_gradients
+                                and args.max_grad_norm is not None
+                                and args.max_grad_norm > 0
+                            ):
+                                grad_norm = self.accelerator.clip_grad_norm_(
+                                    model.policy.parameters(),
+                                    args.max_grad_norm,
+                                )
+                                grad_norm_stats[ppo_epoch_idx, minibatch_idx] = grad_norm.item()
                             optimizer.step()
                             optimizer.zero_grad()
                             with torch.no_grad():
@@ -632,6 +643,7 @@ class PPOSingleVLLMTrainer(Trainer):
                 metrics["loss/value_avg"] = self.accelerator.gather(vf_loss_stats).mean().item()
                 metrics["val/clipfrac_avg"] = self.accelerator.gather(vf_clipfrac_stats).mean().item()
                 metrics["policy/entropy_avg"] = self.accelerator.gather(entropy_stats).mean().item()
+                metrics["policy/grad_norm"] = self.accelerator.gather(grad_norm_stats).mean().item()
                 metrics["val/ratio"] = self.accelerator.gather(ratio_stats).mean().item()
                 metrics["val/ratio_var"] = self.accelerator.gather(ratio_stats).var().item()
                 metrics["val/num_eos_tokens"] = (responses == tokenizer.eos_token_id).sum().item()
