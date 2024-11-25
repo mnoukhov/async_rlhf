@@ -118,7 +118,7 @@ class OnlineDPOTrainer(RLOOTrainer):
         self.reward_model = reward_model
         self.train_dataset = train_dataset
         self.train_dataset_len = len(train_dataset)
-        self.data_collator = data_collator
+        self.data_collator = data_collator if data_collator is not None else DataCollatorWithPadding(tokenizer)
         self.eval_dataset = eval_dataset
         self.optimizer, self.lr_scheduler = optimizers
 
@@ -161,7 +161,7 @@ class OnlineDPOTrainer(RLOOTrainer):
         if args.num_sample_generations > 0:
             self.sample_generations_freq = max(1, self.num_batches // args.num_sample_generations)
 
-        assert args.rloo_k == 2, "currently only support 2"
+        assert args.rloo_k >= 2, "currently only support 2"
         self.local_dataloader_batch_size = args.local_batch_size
         # self.local_dataloader_batch_size = exact_div(
         #     args.local_batch_size,
@@ -227,7 +227,7 @@ class OnlineDPOTrainer(RLOOTrainer):
             self.train_dataset,
             batch_size=self.local_dataloader_batch_size,
             shuffle=True,
-            collate_fn=DataCollatorWithPadding(tokenizer),
+            collate_fn=self.data_collator,
             drop_last=True,  # needed; otherwise the last batch will be of ragged shape
         )
         # sync random states for DataLoader(shuffle=True) before `accelerator.prepare`
@@ -239,7 +239,7 @@ class OnlineDPOTrainer(RLOOTrainer):
         self.eval_dataloader = DataLoader(
             self.eval_dataset,
             batch_size=args.per_device_eval_batch_size,
-            collate_fn=DataCollatorWithPadding(self.tokenizer),
+            collate_fn=self.data_collator,
             drop_last=True,
         )  # no need to shuffle eval dataset
         self.eval_dataloader = accelerator.prepare(self.eval_dataloader)
@@ -282,7 +282,7 @@ class OnlineDPOTrainer(RLOOTrainer):
             min_new_tokens=args.response_length,
             temperature=(args.temperature + 1e-7),
             top_k=0.0,
-            top_p=1.0,
+            top_p=args.top_p,
             do_sample=True,
         )
 
@@ -331,6 +331,9 @@ class OnlineDPOTrainer(RLOOTrainer):
             with torch.no_grad():
                 queries = data["input_ids"].to(device)
                 queries = queries.repeat(args.rloo_k, 1)
+                labels = data.get("labels", None)
+                if labels is not None:
+                    labels = labels.repeat(args.rloo_k, 1)
                 context_length = queries.shape[1]
                 query_responses = []
                 responses = []
@@ -344,6 +347,10 @@ class OnlineDPOTrainer(RLOOTrainer):
                 with unwrap_model_for_generation(model, self.accelerator) as unwrapped_model:
                     for i in range(0, queries.shape[0], args.local_rollout_forward_batch_size):
                         query = queries[i : i + args.local_rollout_forward_batch_size]
+                        if labels is not None:
+                            label = (
+                                labels[i : i + args.local_rollout_forward_batch_size] if labels is not None else None
+                            )
                         gen_start_time = time.time()
                         query_response, logits = generate(
                             unwrapped_model,
@@ -381,9 +388,12 @@ class OnlineDPOTrainer(RLOOTrainer):
                         # Response Processing 2. run reward model on the truncated responses
                         postprocessed_query_response = torch.cat((query, postprocessed_response), 1)
                         sequence_length = first_true_indices(postprocessed_response == tokenizer.pad_token_id) - 1
-                        _, score, _ = get_reward(
-                            reward_model, postprocessed_query_response, tokenizer.pad_token_id, context_length
-                        )
+                        if label is not None:
+                            score = reward_model(postprocessed_response, label)
+                        else:
+                            _, score, _ = get_reward(
+                                reward_model, postprocessed_query_response, tokenizer.pad_token_id, context_length
+                            )
                         batch_reward_and_ref_time += time.time() - reward_and_ref_start_time
 
                         query_responses.append(query_response)
@@ -425,21 +435,22 @@ class OnlineDPOTrainer(RLOOTrainer):
                 non_score_reward = (-args.kl_coef * kl).sum(1)
                 rlhf_reward = scores + non_score_reward
 
-                # num_examples should be same as args.local_batch_size
-                num_examples = scores.size(0) // 2
-                first_half = scores[:num_examples]
-                second_half = scores[num_examples:]
+                num_examples = scores.size(0) // args.rloo_k
+                scores_reshaped = scores.reshape(args.rloo_k, num_examples).t()
 
-                num_examples_range = torch.arange(num_examples).to(scores.device)
+                # Get the max scores and their local indices
+                chosen_scores, chosen_local_indices = torch.max(scores_reshaped, dim=1)
 
-                chosen_indices = torch.where(
-                    first_half >= second_half, num_examples_range.clone(), num_examples_range.clone() + num_examples
+                # Get the min scores and their local indices
+                rejected_scores, rejected_local_indices = torch.min(scores_reshaped, dim=1)
+
+                scores_margin = chosen_scores - rejected_scores
+
+                # Calculate the global indices
+                chosen_indices = chosen_local_indices * num_examples + torch.arange(num_examples, device=scores.device)
+                rejected_indices = rejected_local_indices * num_examples + torch.arange(
+                    num_examples, device=scores.device
                 )
-                rejected_indices = torch.where(
-                    first_half < second_half, num_examples_range.clone(), num_examples_range.clone() + num_examples
-                )
-
-                scores_margin = scores[chosen_indices] - scores[rejected_indices]
 
                 if self.args.save_generations:
                     decoded_queries = tokenizer.batch_decode(queries[:num_examples], skip_special_tokens=True)
