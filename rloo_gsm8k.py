@@ -10,6 +10,7 @@ from trl import ModelConfig
 
 from src.gsm8k_utils import GSM8k_PROMPT, MathRewardModel, extract_answer
 from src.rloo_single_vllm_trainer import RLOOSingleVLLMTrainer, RLOOVLLMConfig
+from src.rloo_vllm_trainer import RLOOVLLMTrainer
 from src.rloo_trainer import MyRLOOTrainer as RLOOTrainer
 from src.utils import TRLParser, WandbLogModelConfig
 
@@ -24,6 +25,7 @@ class ScriptArguments:
     config: str = field(default=None, metadata={"help": "Path to the optional config file"})
     wandb_run_id: Optional[str] = field(default=None)
     vllm: bool = False
+    single: bool = True
 
 
 def prepare_dataset(dataset, tokenizer):
@@ -94,14 +96,15 @@ if __name__ == "__main__":
     ################
     raw_datasets = load_dataset(args.dataset_name, data_dir=args.dataset_subset)
     if config.sanity_check:
-        num_overfit = config.per_device_train_batch_size * config.gradient_accumulation_steps
-        if not config.train_single:
-            num_overfit = num_overfit // config.rloo_k
-        for key in raw_datasets:
-            raw_datasets[key] = raw_datasets[key].select(range(num_overfit))
+        # num_overfit = config.per_device_train_batch_size * config.gradient_accumulation_steps
+        # if not config.train_single:
+        #     num_overfit = num_overfit // config.rloo_k
+        # for key in raw_datasets:
+        #     raw_datasets[key] = raw_datasets[key].select(range(num_overfit))
         config.push_to_hub = False
         config.report_to = ""
         config.save_strategy = "no"
+        config.logging_steps = 1
         # config.total_episodes = 2048
         # config.per_device_train_batch_size = 4
         # config.gradient_accumulation_steps = 4
@@ -121,8 +124,10 @@ if __name__ == "__main__":
     # Training
     ################
 
-    if args.vllm:
+    if args.vllm and args.single:
         TrainerCls = RLOOSingleVLLMTrainer
+    elif args.vllm and not args.single:
+        TrainerCls = RLOOVLLMTrainer
     else:
         TrainerCls = RLOOTrainer
 
