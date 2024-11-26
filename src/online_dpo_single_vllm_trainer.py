@@ -633,10 +633,17 @@ class OnlineDPOSingleVLLMTrainer(RLOOTrainer):
                                 and args.max_grad_norm is not None
                                 and args.max_grad_norm > 0
                             ):
-                                grad_norm = self.accelerator.clip_grad_norm_(
-                                    model.parameters(),
-                                    args.max_grad_norm,
-                                )
+                                if hasattr(optimizer, "clip_grad_norm"):
+                                    # Some optimizers (like the sharded optimizer) have a specific way to do gradient clipping
+                                    optimizer.clip_grad_norm(args.max_grad_norm)
+                                elif hasattr(model, "clip_grad_norm_"):
+                                    # Some models (like FullyShardedDDP) have a specific way to do gradient clipping
+                                    model.clip_grad_norm_(args.max_grad_norm)
+                                else:
+                                    grad_norm = self.accelerator.clip_grad_norm_(
+                                        model.parameters(),
+                                        args.max_grad_norm,
+                                    )
                                 grad_norm_stats[ppo_epoch_idx, minibatch_idx] = grad_norm.item()
                             optimizer.step()
                             optimizer.zero_grad()
