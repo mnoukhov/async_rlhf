@@ -107,9 +107,9 @@ if __name__ == "__main__":
     ################
     raw_datasets = load_dataset(args.dataset_name, data_dir=args.dataset_subset)
     if config.sanity_check:
-        num_overfit = config.per_device_train_batch_size * config.gradient_accumulation_steps
-        for key in raw_datasets:
-            raw_datasets[key] = raw_datasets[key].select(range(num_overfit))
+        # num_overfit = config.per_device_train_batch_size * config.gradient_accumulation_steps
+        # for key in raw_datasets:
+        #     raw_datasets[key] = raw_datasets[key].select(range(num_overfit))
         config.push_to_hub = False
         config.report_to = ""
         config.save_strategy = "no"
