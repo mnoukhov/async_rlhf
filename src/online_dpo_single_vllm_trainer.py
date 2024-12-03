@@ -113,6 +113,8 @@ class OnlineDPOSingleVLLMTrainer(RLOOTrainer):
         )
         args.micro_batch_size = int(args.per_device_train_batch_size * args.world_size)
         args.batch_size = int(args.local_batch_size * args.world_size)
+        # `per_rank_rollout_batch_size` is our `args.local_batch_size`
+        # `per_rank_minibatch_size` is our `args.local_mini_batch_size`
         args.mini_batch_size = exact_div(
             args.batch_size,
             args.num_mini_batches,
@@ -127,11 +129,13 @@ class OnlineDPOSingleVLLMTrainer(RLOOTrainer):
             assert (
                 args.local_mini_batch_size >= 8
             ), f"Per-rank minibatch size {args.local_mini_batch_size} is insufficient for whitening"
-        # `per_rank_rollout_batch_size` is our `args.local_batch_size`
-        # `per_rank_minibatch_size` is our `args.local_mini_batch_size`
+        # local number of prompts
+        self.local_dataloader_batch_size = args.local_batch_size
+        # total number of generations
+        self.generated_batch_size = args.batch_size * args.rloo_k
         self.num_batches = exact_div(
             args.total_episodes,
-            args.batch_size,
+            self.generated_batch_size,
             f" total_episodes {args.total_episodes} should be divisible by batch_size {args.batch_size} ",
         )
         args.num_updates = self.num_batches * args.num_mini_batches * args.num_ppo_epochs
@@ -140,12 +144,6 @@ class OnlineDPOSingleVLLMTrainer(RLOOTrainer):
             self.sample_generations_freq = max(1, self.num_batches // args.num_sample_generations)
 
         assert args.rloo_k >= 2
-        self.local_dataloader_batch_size = args.local_batch_size
-        # self.local_dataloader_batch_size = exact_div(
-        #     args.local_batch_size,
-        #     args.rloo_k,
-        #     "`local_batch_size` must be a multiple of rloo_k",
-        # )  # RLOO logic: needed because RLOO repeats the same prompt args.rloo_k times
 
         ### DPO stuff
         self.beta = config.beta
@@ -336,7 +334,7 @@ class OnlineDPOSingleVLLMTrainer(RLOOTrainer):
         DUMMY_PAD_TOKEN = 0  # we can't use tokenizer.pad_token_id because it's outside vocab and `torch.gather(all_logprob, 2, response.unsqueeze(-1))` will error out
         self.control = self.callback_handler.on_train_begin(args, self.state, self.control)
         for batch_num in range(1, self.num_batches + 1):
-            self.state.episode += 1 * args.batch_size
+            self.state.episode += args.rloo_k * args.batch_size
             self.lr_scheduler.step()
             data = next(iter_dataloader)
             vllm_responses = torch.zeros(
