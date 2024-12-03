@@ -135,10 +135,10 @@ class RLOOSingleVLLMTrainer(Trainer):
                 args.rloo_k,
                 "`local_batch_size` must be a multiple of rloo_k",
             )  # RLOO logic: needed because RLOO repeats the same prompt args.rloo_k times
-            self.all_generated_batch_size = args.batch_size
+            self.generated_batch_size = args.batch_size
         else:
             self.local_dataloader_batch_size = args.local_batch_size
-            self.all_generated_batch_size = args.batch_size * args.rloo_k
+            self.generated_batch_size = args.batch_size * args.rloo_k
 
         #########
         # setup model, optimizer, and others
@@ -328,16 +328,16 @@ class RLOOSingleVLLMTrainer(Trainer):
         DUMMY_PAD_TOKEN = 0  # we can't use tokenizer.pad_token_id because it's outside vocab and `torch.gather(all_logprob, 2, response.unsqueeze(-1))` will error out
         self.control = self.callback_handler.on_train_begin(args, self.state, self.control)
         for update in range(1, self.num_batches + 1):
-            self.state.episode += 1 * args.batch_size
+            self.state.episode += self.generated_batch_size
             self.lr_scheduler.step()
             data = next(iter_dataloader)
             vllm_responses = torch.zeros(
-                (self.all_generated_batch_size, args.response_length),
+                (self.generated_batch_size, args.response_length),
                 device=accelerator.device,
                 dtype=torch.long,
             )
             vllm_response_lprobs = torch.zeros(
-                (self.all_generated_batch_size, args.response_length),
+                (self.generated_batch_size, args.response_length),
                 device=accelerator.device,
                 dtype=torch.float,
             )
@@ -426,8 +426,7 @@ class RLOOSingleVLLMTrainer(Trainer):
                 for i in range(0, queries.shape[0], args.local_rollout_forward_batch_size):
                     query = queries[i : i + args.local_rollout_forward_batch_size]
                     query_response = query_responses[i : i + args.local_rollout_forward_batch_size]
-                    if labels is not None:
-                        label = labels[i : i + args.local_rollout_forward_batch_size]
+                    label = None if labels is None else labels[i : i + args.local_rollout_forward_batch_size]
                     response = query_response[:, context_length:]
 
                     # use the logits during generation directly, instead of using the following

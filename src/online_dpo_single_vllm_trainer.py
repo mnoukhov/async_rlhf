@@ -334,7 +334,7 @@ class OnlineDPOSingleVLLMTrainer(RLOOTrainer):
         DUMMY_PAD_TOKEN = 0  # we can't use tokenizer.pad_token_id because it's outside vocab and `torch.gather(all_logprob, 2, response.unsqueeze(-1))` will error out
         self.control = self.callback_handler.on_train_begin(args, self.state, self.control)
         for batch_num in range(1, self.num_batches + 1):
-            self.state.episode += args.rloo_k * args.batch_size
+            self.state.episode += self.generated_batch_size
             self.lr_scheduler.step()
             data = next(iter_dataloader)
             vllm_responses = torch.zeros(

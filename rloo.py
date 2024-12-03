@@ -13,7 +13,7 @@ from transformers import (
 from trl import ModelConfig
 
 from src.online_bok_trainer import OnlineBoKTrainer
-from src.rloo_trainer import MyRLOOConfig as RLOOConfig
+from src.rloo_single_vllm_trainer import RLOOSingleVLLMTrainer, RLOOVLLMConfig
 from src.rloo_trainer import MyRLOOTrainer as RLOOTrainer
 from src.utils import TRLParser, WandbLogModelConfig
 
@@ -29,6 +29,7 @@ class ScriptArguments:
     max_length: int = field(default=512, metadata={"help": "The maximum sequence length for SFT Trainer"})
     config: str = field(default=None, metadata={"help": "Path to the optional config file"})
     vllm: bool = field(default=False)
+    single: bool = True
     bok: bool = field(default=False)
     wandb_run_id: Optional[str] = field(default=None)
 
@@ -52,7 +53,7 @@ def prepare_dataset(dataset, tokenizer):
 
 
 if __name__ == "__main__":
-    parser = TRLParser((ScriptArguments, RLOOConfig, ModelConfig))
+    parser = TRLParser((ScriptArguments, RLOOVLLMConfig, ModelConfig))
     args, config, model_config = parser.parse_args_and_config()
 
     if args.wandb_run_id == "slurm":
@@ -98,6 +99,7 @@ if __name__ == "__main__":
         config.report_to = ""
         config.save_strategy = "no"
         config.num_sample_generations = 0
+        config.logging_steps = 1
 
     train_dataset = raw_datasets[args.dataset_train_split]
     eval_dataset = raw_datasets[args.dataset_test_split]
@@ -114,6 +116,8 @@ if __name__ == "__main__":
 
     if args.bok:
         TrainerCls = OnlineBoKTrainer
+    elif args.vllm and args.single:
+        TrainerCls = RLOOSingleVLLMTrainer
     else:
         TrainerCls = RLOOTrainer
 

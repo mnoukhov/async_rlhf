@@ -1,7 +1,7 @@
 output_global_parent_dir: results
 wandb_run_id: slurm
-output_dir: onlinedpo_pythia410m_tldr6.9b_vllm
-run_name: onlinedpo_pythia410m_tldr6.9b
+output_dir: rloo_pythia410m_tldr6.9b
+run_name: rloo_pythia410m_tldr6.9b
 dataset_name: vwxyzjn/summarize_from_feedback_tldr_3_filtered_oai_preprocessing_1706381144
 dataset_test_split: validation
 max_length: 512
@@ -14,22 +14,20 @@ sync: True
 # fp16
 fp16: True
 torch_dtype: float16
-## online dpo stuff
-loss_type: sigmoid
 ## ppo stuff
 total_episodes: 131072
 response_length: 53
 num_ppo_epochs: 1
-num_mini_batches: 1
+num_mini_batches: 1 
 learning_rate: 3.0e-6
-per_device_train_batch_size: 8
+per_device_train_batch_size: 16
 gradient_accumulation_steps: 32
 model_name_or_path: mnoukhov/pythia410m-sft-tldr
 sft_model_path: mnoukhov/pythia410m-sft-tldr
 reward_model_path: mnoukhov/pythia410m-rm-tldr6.9b
+local_rollout_forward_batch_size: 32
 non_eos_penalty: True
 stop_token: eos
-local_rollout_forward_batch_size: 32
 # evaluation_strategy: "steps"
 # eval_steps: 0.2
 ## save strategy
@@ -38,4 +36,3 @@ save_steps: 0.25
 hub_strategy: all_checkpoints
 logging_steps: 100
 num_sample_generations: 4
-save_generations: False
