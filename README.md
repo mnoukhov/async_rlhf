@@ -1,5 +1,6 @@
 # Code for Asynchronous RLHF: Faster and More Efficient Off-Policy RL for Language Models
 
+Note that the method of async RL for LLMs has been integrated in the the [open-instruct](https://github.com/allenai/open-instruct) RLHF library
 
 ## Setup
 
