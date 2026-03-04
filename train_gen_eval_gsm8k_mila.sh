@@ -12,7 +12,7 @@ set -e
 # source mila.sh
 # tag with the git commit
 export WANDB_TAGS=$(git rev-parse --short HEAD)
-uv run $@ --output_global_parent_dir results/
+uv run accelerate launch --multi_gpu --mixed_precision=bf16 --num_processes=3 $@ --output_global_parent_dir results/
 
 MODEL_PATH=$(readlink -f output_dir)
 echo "Using output dir symlinked: $MODEL_PATH"
