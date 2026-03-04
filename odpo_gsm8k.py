@@ -98,7 +98,7 @@ if __name__ == "__main__":
     )
     policy = AutoModelForCausalLM.from_pretrained(
         config.sft_model_path,
-        torch_dtype=torch_dtype,
+        torch_dtype=torch_dtype if torch_dtype != torch.float16 else torch.float32,
         attn_implementation="flash_attention_2",
     )
 
