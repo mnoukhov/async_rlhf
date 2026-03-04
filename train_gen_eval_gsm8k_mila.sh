@@ -9,15 +9,15 @@
 #SBATCH --ntasks-per-node=1
 
 set -e
-source mila.sh
+# source mila.sh
 # tag with the git commit
 export WANDB_TAGS=$(git rev-parse --short HEAD)
-$@ --output_global_parent_dir $SCRATCH/trl_summarize/results
+uv run $@ --output_global_parent_dir results/
 
 MODEL_PATH=$(readlink -f output_dir)
 echo "Using output dir symlinked: $MODEL_PATH"
 MODEL_PATH_ARG="--model_name_or_path $MODEL_PATH"
 
-CUDA_VISIBLE_DEVICES=0 python generate_gsm8k.py --config configs/generate_gsm8k.yml $MODEL_PATH_ARG
+CUDA_VISIBLE_DEVICES=0 uv run generate_gsm8k.py --config configs/generate_gsm8k.yml $MODEL_PATH_ARG
 
-CUDA_VISIBLE_DEVICES=0 python eval_gsm8k.py --config configs/evaluate_gsm8k.yml $MODEL_PATH_ARG
+CUDA_VISIBLE_DEVICES=0 uv run eval_gsm8k.py --config configs/evaluate_gsm8k.yml $MODEL_PATH_ARG

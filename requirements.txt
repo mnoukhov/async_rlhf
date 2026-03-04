@@ -3,4 +3,4 @@ peft==0.10.0
 wandb
 deepspeed
 transformers==4.43.3
-vllm
+vllm==0.6.1.post2

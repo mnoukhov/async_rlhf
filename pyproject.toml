@@ -1,3 +1,27 @@
+[project]
+name = "async-rlhf"
+version = "0.1.0"
+description = "Async RLHF training and evaluation scripts"
+requires-python = ">=3.10"
+dependencies = [
+    "trl==0.9.4",
+    "peft==0.10.0",
+    "wandb",
+    "deepspeed",
+    "transformers==4.43.3",
+    "vllm==0.6.1.post2",
+    "setuptools>=82.0.0",
+    "rich>=14.3.3",
+    "hf-transfer>=0.1.9",
+    "flash-attn",
+]
+
+[tool.uv]
+package = false
+
+[tool.uv.extra-build-dependencies]
+flash-attn = [{ requirement = "torch", match-runtime = true }]
+
 [tool.ruff]
 lint.ignore = ["E501", "E741", "W605"]
 lint.select = ["E", "F", "I", "W"]
