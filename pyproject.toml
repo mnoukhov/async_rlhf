@@ -16,6 +16,13 @@ dependencies = [
     "flash-attn",
 ]
 
+[tool.gantry]
+workspace = "ai2/oe-adapt-code"
+gh_token_secret = "michaeln_GITHUB_TOKEN"
+budget = "ai2/oe-adapt"
+log_level = "warning"
+quiet = false
+
 [tool.uv]
 package = false
 

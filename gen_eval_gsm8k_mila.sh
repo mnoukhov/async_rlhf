@@ -9,7 +9,9 @@
 #SBATCH --ntasks-per-node=1
 
 set -e
-source mila.sh
+export WANDB_PROJECT=trl
+export WANDB_ENTITY=mila-language-drift
+# source mila.sh
 # tag with the git commit
 # export WANDB_TAGS=$(git rev-parse --short HEAD)
 # $@ --output_global_parent_dir $SCRATCH/trl_summarize/results
@@ -18,6 +20,6 @@ source mila.sh
 # echo "Using output dir symlinked: $MODEL_PATH"
 # MODEL_PATH_ARG="--model_name_or_path $MODEL_PATH"
 #
-python generate_gsm8k.py --config configs/generate_gsm8k.yml $@
+uv run generate_gsm8k.py --config configs/generate_gsm8k.yml $@
 
-python eval_gsm8k.py --config configs/evaluate_gsm8k.yml $@
+uv run eval_gsm8k.py --config configs/evaluate_gsm8k.yml $@
