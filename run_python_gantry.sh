@@ -10,11 +10,18 @@ branch="${branch//\//-}"
 ts="$(date -u +%Y%m%d-%H%M%S)"
 name="${branch}-${ts}"
 
+
 gantry run \
-  --beaker-image "$IMAGE" \
-  --weka="$WEKA_MOUNT" \
-  --uv-all-extras \
-  --show-logs \
-  --default-python-version "$DEFAULT_PYTHON" \
-  --name "$name" \
-  -- ./train_gen_eval_gsm8k_mila.sh "$@"
+    --beaker-image "$IMAGE" \
+    --weka="$WEKA_MOUNT" \
+    --uv-all-extras \
+    --show-logs \
+    --default-python-version "$DEFAULT_PYTHON" \
+    --secret-env HF_TOKEN=michaeln_HF_TOKEN \
+    --secret-env WANDB_API_KEY=michaeln_WANDB_API_KEY \
+    --priority high \
+    --cluster ai2/saturn \
+    --workspace ai2/oe-adapt-code \
+    --gpus 4 \
+    --name "$name" \
+    -- ./train_gen_eval_gsm8k_mila.sh "$@"
