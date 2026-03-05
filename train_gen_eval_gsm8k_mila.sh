@@ -11,6 +11,7 @@
 set -e
 export WANDB_PROJECT=trl
 export WANDB_ENTITY=mila-language-drift
+export SLURM_JOB_ID="${SLURM_JOB_ID:-${BEAKER_JOB_ID:0:8}}"
 # source mila.sh
 # tag with the git commit
 export WANDB_TAGS=$(git rev-parse --short HEAD)
