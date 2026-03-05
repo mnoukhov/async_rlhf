@@ -9,6 +9,8 @@
 #SBATCH --ntasks-per-node=1
 
 set -e
+export WANDB_PROJECT=trl
+export WANDB_ENTITY=mila-language-drift
 # source mila.sh
 # tag with the git commit
 export WANDB_TAGS=$(git rev-parse --short HEAD)
