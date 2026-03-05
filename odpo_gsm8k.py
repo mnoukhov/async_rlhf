@@ -129,7 +129,12 @@ if __name__ == "__main__":
 
     assert train_dataset[0]["input_ids"][-1] != tokenizer.eos_token_id, "The last token should not be an EOS token"
     space_padding_id = tokenizer.encode(" ", add_special_tokens=False)[0]
-    data_collator = DataCollatorForTokenClassification(tokenizer, label_pad_token_id=space_padding_id)
+    base_data_collator = DataCollatorForTokenClassification(tokenizer, label_pad_token_id=space_padding_id)
+
+    def data_collator(features):
+        # `accelerate.send_to_device` can pass `non_blocking`; plain dict avoids BatchEncoding `.to(...)` mismatch.
+        return dict(base_data_collator(features))
+
     ################
     # Training
     ################
