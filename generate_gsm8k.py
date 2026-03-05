@@ -1,6 +1,7 @@
 import gc
 import json
 import os
+import shutil
 from dataclasses import dataclass, field
 from typing import List, Optional
 
@@ -10,6 +11,8 @@ import vllm
 from datasets import load_dataset
 from packaging.version import Version
 from peft import PeftModelForCausalLM
+from safetensors import safe_open
+from safetensors.torch import load_file, save_file
 from transformers import (
     AutoModelForCausalLM,
 )
@@ -41,6 +44,47 @@ class GenerateScriptArguments:
     torch_dtype: Optional[str] = field(default="auto")
     sanity_check: Optional[bool] = field(default=False)
     wandb_run_id: str = None  # unused
+
+
+def maybe_prepare_vllm_compatible_checkpoint(model_name_or_path: str) -> str:
+    """vLLM expects unwrapped parameter names; some checkpoints are saved as `module.*`."""
+    if not os.path.isdir(model_name_or_path):
+        return model_name_or_path
+
+    weights_path = os.path.join(model_name_or_path, "model.safetensors")
+    if not os.path.exists(weights_path):
+        return model_name_or_path
+
+    with safe_open(weights_path, framework="pt") as f:
+        keys = list(f.keys())
+
+    needs_unwrap = any(key.startswith("module.") for key in keys)
+    if not needs_unwrap:
+        return model_name_or_path
+
+    compat_dir = os.path.join(model_name_or_path, "_vllm_compat")
+    compat_weights_path = os.path.join(compat_dir, "model.safetensors")
+    if not os.path.exists(compat_weights_path):
+        os.makedirs(compat_dir, exist_ok=True)
+        tensors = load_file(weights_path)
+        unwrapped_tensors = {
+            key[len("module.") :] if key.startswith("module.") else key: value for key, value in tensors.items()
+        }
+        save_file(unwrapped_tensors, compat_weights_path)
+        for file_name in [
+            "config.json",
+            "generation_config.json",
+            "special_tokens_map.json",
+            "tokenizer.json",
+            "tokenizer.model",
+            "tokenizer_config.json",
+            "added_tokens.json",
+        ]:
+            src = os.path.join(model_name_or_path, file_name)
+            if os.path.exists(src):
+                shutil.copy2(src, os.path.join(compat_dir, file_name))
+        print(f"created vLLM-compatible checkpoint: {compat_dir}")
+    return compat_dir
 
 
 def generate(script_args):
@@ -99,7 +143,11 @@ def generate(script_args):
             tensor_parallel_size = max(divisor for divisor in [1, 2, 4, 8] if divisor < script_args.num_gpus)
 
         llm = LLM(
-            model=model_name_or_path if merged_model_path is None else merged_model_path,
+            model=(
+                maybe_prepare_vllm_compatible_checkpoint(model_name_or_path)
+                if merged_model_path is None
+                else merged_model_path
+            ),
             tokenizer=script_args.tokenizer_name,
             dtype=script_args.torch_dtype,
             trust_remote_code=True,
