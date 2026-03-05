@@ -15,6 +15,7 @@ gantry run \
     --beaker-image "$IMAGE" \
     --weka="$WEKA_MOUNT" \
     --uv-all-extras \
+    --show-logs \
     --default-python-version "$DEFAULT_PYTHON" \
     --secret-env HF_TOKEN=michaeln_HF_TOKEN \
     --secret-env WANDB_API_KEY=michaeln_WANDB_API_KEY \
